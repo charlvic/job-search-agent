@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-Phase 1: Job Fit Scorer + Proposal Writer + Resume Tailor
+v0.3.0 - Scoring overhaul: location hierarchy, W2 tiers, manual check lane
 """
 
 import os
@@ -20,6 +20,7 @@ ENV_FILE   = BASE_DIR / "config" / ".env"
 PROPOSALS  = BASE_DIR / "data" / "proposals"
 RESUMES    = BASE_DIR / "data" / "resumes"
 SKIP_LOG   = BASE_DIR / "data" / "skipped_jobs.log"
+MANUAL_LOG = BASE_DIR / "data" / "manual_review.log"
 TAILOR_JS  = BASE_DIR / "tailor_resume.js"
 
 # ── Load API key from .env ─────────────────────────────────────────────────────
@@ -63,56 +64,173 @@ Here is Charles's profile:
 Here is the job posting text:
 {posting_text}
 
-Evaluate this posting using ALL of the following criteria:
+Evaluate this posting using ALL of the following criteria carefully and precisely.
 
-HARD SKIPS (return score of 0 if any apply):
-- Posting says applications are closed or no longer being accepted
-- Domain is crypto, blockchain, stock trading, or adjacent speculation
-- Rate is below $50/hr or $500 fixed price
-- Requires full-time W2 AND salary is under $185,000
-- Applicant count exceeds 500 (if mentioned in posting)
-- On-site only with no remote or hybrid option
+════════════════════════════════════════
+HARD SKIPS — return score of 0 if ANY apply:
+════════════════════════════════════════
+- Posting explicitly says applications are closed or no longer being accepted
+- Domain is crypto, blockchain, stock trading, or adjacent financial speculation
+- Hourly rate below $50/hr or fixed price below $500
+- Applicant count exceeds 500
 
-SCORE REDUCTIONS:
-- Applicant count 250-500: reduce score by 2
-- Hybrid with more than 2 days in office: reduce score by 1
-- Hybrid but office is NOT in NJ or NYC: reduce score by 1
-- Full-time W2 role (even if salary is over $185k): reduce score by 1
+════════════════════════════════════════
+MANUAL REVIEW TRIGGERS:
+════════════════════════════════════════
+Set "manual_review": true when a hard skip rule would normally apply BUT
+exceptional compensating factors are present. Exceptional factors include:
+- Salary $250k+ or $300k+
+- Equity or stock options mentioned
+- Unlimited PTO mentioned
+- Near-perfect skills match (9+/10)
+- Highly prestigious or strategically valuable company
+In these cases do NOT hard skip — flag for manual review instead.
 
+Also set "manual_review": true for these location edge cases:
+- On-site only BUT exceptional compensating factors present
+- Location outside NJ/NYC/tri-state BUT exceptional compensating factors present
+
+════════════════════════════════════════
+LOCATION SCORING:
+════════════════════════════════════════
+Remote:
+  +1 fully preferred
+
+Hybrid:
+  +0 acceptable with no penalty when office is in NJ or NYC
+  -1 when office days exceed 2 per week
+  -1 when office location is outside NJ/NYC (CT, PA, or other states)
+  Note: NJ and NYC are treated as equivalent (easy commute)
+
+On-site:
+  -2 meaningful reduction but never a hard skip unless no compensating factors
+  Connecticut, Pennsylvania, or outside NJ/NYC tri-state corridor: -1 additional
+  Exception: trigger manual review if exceptional compensating factors present
+
+Unknown/not stated:
+  +0 neutral — do not assume on-site, do not penalize
+  Set "location_stated": false so it gets flagged in output
+
+Geography hard skip (only when ALL of these are true):
+  - Location is far outside NJ/NYC (e.g. Austin, Chicago, LA, Seattle)
+  - AND on-site required
+  - AND no exceptional compensating factors
+
+════════════════════════════════════════
+W2 TRADITIONAL ROLE SCORING:
+════════════════════════════════════════
+Base W2: -1 (acceptable but not preferred over fractional)
+
+Salary tiers (these OFFSET the base W2 penalty and can exceed it):
+  $185k–$249k:  meets floor, no additional adjustment
+  $250k–$299k:  +1
+  $300k+:       +2
+
+Benefits boosters (traditional W2 only):
+  Unlimited PTO mentioned: +1
+  Both $300k+ salary AND Unlimited PTO: +2 total (not stacked)
+
+Important W2 rules:
+  - NEVER penalize a W2 role for lacking a fractional option
+  - Score W2 roles purely on traditional employment criteria
+  - Fractional fit is only relevant when posting explicitly mentions
+    fractional, contract, or consulting engagement
+
+════════════════════════════════════════
 SCORE BOOSTERS:
-+3  Core role match: CPO / CQO / CDO / Jira Admin / Atlassian / Product
-+2  Rate is at or above floor ($50/hr or $500 fixed, or salary over $185k)
-+2  Industry is in Charles's client history (tech, pharma, media, travel, luxury)
+════════════════════════════════════════
++3  Core role match: CPO / Head of Product / CQO / CDO / Jira Admin / Atlassian / Product Director
++2  Rate at or above floor, or salary meets $185k+ threshold
++2  Industry in Charles's client history (tech, pharma, media, travel, luxury, retail)
 +1  Startup or VC-backed company
-+1  Mentions specific pain Charles solves (QA, SDLC, product ops, accessibility)
++1  Mentions specific pain Charles solves (QA, SDLC, product ops, accessibility, Atlassian)
 +1  Remote-friendly or location flexible
-+1  Mentions Unlimited PTO (traditional jobs only — boosts score for W2 roles)
 
-Score 1-10. Only generate a proposal if score is 7 or above.
+════════════════════════════════════════
+APPLICANT COUNT:
+════════════════════════════════════════
+250–500 applicants: -2
+500+ applicants: hard skip (score 0)
+Under 250: no penalty
 
-Return JSON only with this exact structure:
+════════════════════════════════════════
+SCORING THRESHOLD:
+════════════════════════════════════════
+Score 1–10.
+7+ = auto-proceed with proposal and resume
+4–6 = skip and log
+0–3 = hard skip and log
+Manual review = pause and ask Charles regardless of score
+
+Return JSON only with this exact structure — no preamble, no markdown:
 {{
   "score": <number 1-10>,
-  "reason": "<one sentence explaining the score>",
+  "reason": "<two to three sentences explaining the score factor by factor>",
   "tone": "<one of: direct_confident, formal_polished, conversational_authoritative>",
   "key_focus": "<the single most important thing the proposal should lead with>",
   "location_type": "<one of: remote, hybrid, onsite, unknown>",
+  "location_stated": <true or false>,
   "job_track": "<one of: traditional, fractional, freelance>",
-  "skip_reason": "<if hard skip, brief reason — otherwise empty string>"
+  "skip_reason": "<if hard skip, brief reason — otherwise empty string>",
+  "manual_review": <true or false>,
+  "manual_review_reason": "<if manual review, explain the conflict and the exceptional factors — otherwise empty string>",
+  "exceptional_factors": ["<list any exceptional factors detected — salary tier, equity, unlimited PTO, skills match strength>"]
 }}
-
-Return JSON only. No other text.
 """
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=400,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}]
     )
 
     raw = message.content[0].text.strip()
     raw = re.sub(r"```json|```", "", raw).strip()
     return json.loads(raw)
+
+# ── Manual review prompt ───────────────────────────────────────────────────────
+def prompt_manual_review(score_data: dict, url: str) -> bool:
+    """Pause and ask Charles whether to proceed. Returns True if approved."""
+
+    print(f"\n{'='*60}")
+    print("⚠️  MANUAL REVIEW REQUIRED")
+    print(f"{'='*60}")
+    print(f"   Score:          {score_data['score']}/10")
+    print(f"   Conflict:       {score_data['manual_review_reason']}")
+
+    factors = score_data.get("exceptional_factors", [])
+    if factors:
+        print(f"   Exceptional:    {', '.join(factors)}")
+
+    print(f"   Location:       {score_data['location_type']}")
+    print(f"   Track:          {score_data['job_track']}")
+    print(f"{'='*60}")
+    print("\nProceed with proposal and resume? (yes / no / skip):")
+
+    while True:
+        choice = input("> ").strip().lower()
+        if choice in ("yes", "y"):
+            log_manual_review(url, score_data, "APPROVED")
+            return True
+        elif choice in ("no", "n", "skip", "s"):
+            log_manual_review(url, score_data, "REJECTED")
+            return False
+        else:
+            print("Please type yes, no, or skip:")
+
+# ── Log manual review decision ─────────────────────────────────────────────────
+def log_manual_review(url: str, score_data: dict, decision: str):
+    MANUAL_LOG.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = (
+        f"[{timestamp}] {decision} | "
+        f"SCORE {score_data['score']}/10 | "
+        f"{score_data['manual_review_reason']} | "
+        f"FACTORS: {', '.join(score_data.get('exceptional_factors', []))} | "
+        f"{url}\n"
+    )
+    with open(MANUAL_LOG, "a") as f:
+        f.write(entry)
 
 # ── Write the proposal ─────────────────────────────────────────────────────────
 def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str, score_data: dict) -> str:
@@ -124,9 +242,9 @@ def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str,
         "conversational_authoritative": "Conversational but authoritative. Warm opener. Slightly shorter paragraphs. Still results-driven."
     }
 
-    tone        = score_data.get("tone", "direct_confident")
-    tone_instr  = tone_instructions.get(tone, tone_instructions["direct_confident"])
-    key_focus   = score_data.get("key_focus", "")
+    tone       = score_data.get("tone", "direct_confident")
+    tone_instr = tone_instructions.get(tone, tone_instructions["direct_confident"])
+    key_focus  = score_data.get("key_focus", "")
 
     prompt = f"""
 You are writing a job application proposal on behalf of Charles Vickers of CRVTech LLC.
@@ -174,6 +292,7 @@ def save_proposal(proposal: str, url: str, score: int) -> Path:
 
 # ── Log a skipped job ──────────────────────────────────────────────────────────
 def log_skip(url: str, score: int, reason: str):
+    SKIP_LOG.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     entry     = f"[{timestamp}] SCORE {score}/10 | {reason} | {url}\n"
     with open(SKIP_LOG, "a") as f:
@@ -188,7 +307,6 @@ def tailor_resume(posting_text: str, job_title: str, score: int):
     safe_title  = re.sub(r"[^a-zA-Z0-9_]", "_", job_title[:40])
     output_file = f"{timestamp}_{safe_title}_score{score}.docx"
 
-    # Write posting text to a temp file to avoid shell escaping issues
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
         tmp.write(posting_text)
         tmp_path = tmp.name
@@ -207,7 +325,7 @@ def tailor_resume(posting_text: str, job_title: str, score: int):
     finally:
         os.unlink(tmp_path)
 
-# ── Get job title from posting ─────────────────────────────────────────────────
+# ── Extract job title ──────────────────────────────────────────────────────────
 def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> str:
     message = client.messages.create(
         model="claude-sonnet-4-6",
@@ -219,10 +337,27 @@ def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> str:
     )
     return message.content[0].text.strip()
 
+# ── Process a qualifying posting ──────────────────────────────────────────────
+def process_qualifying_posting(client, posting_text, profile, score_data, url):
+    """Shared flow for auto-proceed and manual-approved postings."""
+
+    proposal   = write_proposal(client, posting_text, profile, score_data)
+    saved_path = save_proposal(proposal, url, score_data["score"])
+
+    print(f"\n{'='*60}")
+    print("PROPOSAL")
+    print(f"{'='*60}\n")
+    print(proposal)
+    print(f"\n{'='*60}")
+    print(f"✅ Proposal saved to: {saved_path}")
+
+    job_title = extract_job_title(client, posting_text)
+    tailor_resume(posting_text, job_title, score_data["score"])
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent")
+    print("  CRVTech Job Search Agent  v0.3.0")
     print("="*60)
 
     api_key = load_api_key()
@@ -242,48 +377,56 @@ def main():
             continue
 
         try:
-            # Step 1: Fetch the posting
+            # Step 1: Fetch
             posting_text = fetch_posting(url)
 
-            # Step 2: Score the fit
-            score_data  = score_fit(client, posting_text, profile)
-            score       = score_data["score"]
-            reason      = score_data["reason"]
-            tone        = score_data.get("tone", "direct_confident")
-            skip_reason = score_data.get("skip_reason", "")
-            location    = score_data.get("location_type", "unknown")
-            track       = score_data.get("job_track", "unknown")
+            # Step 2: Score
+            score_data    = score_fit(client, posting_text, profile)
+            score         = score_data["score"]
+            reason        = score_data["reason"]
+            tone          = score_data.get("tone", "direct_confident")
+            location      = score_data.get("location_type", "unknown")
+            location_stated = score_data.get("location_stated", True)
+            track         = score_data.get("job_track", "unknown")
+            manual_review = score_data.get("manual_review", False)
+            skip_reason   = score_data.get("skip_reason", "")
+            factors       = score_data.get("exceptional_factors", [])
 
+            # ── Print score summary ────────────────────────────────────────────
             print(f"\n📊 Fit Score:    {score}/10")
             print(f"   Reason:      {reason}")
             print(f"   Tone:        {tone}")
-            print(f"   Location:    {location}")
+            print(f"   Location:    {location}{' (not stated in posting)' if not location_stated else ''}")
             print(f"   Track:       {track}")
+            if factors:
+                print(f"   Exceptional: {', '.join(factors)}")
 
-            # Step 3: Decide
-            if score < 7:
-                log_reason = skip_reason if skip_reason else reason
-                log_skip(url, score, log_reason)
-                print(f"\n⏭️  Score below threshold. Skipped and logged.")
-                print(f"   Reason: {log_reason}")
+            # ── Routing logic ──────────────────────────────────────────────────
 
+            # Hard skip
+            if score == 0 and not manual_review:
+                log_skip(url, score, skip_reason or reason)
+                print(f"\n🚫 Hard skip. Logged.")
+                print(f"   Reason: {skip_reason or reason}")
+
+            # Manual review lane
+            elif manual_review:
+                approved = prompt_manual_review(score_data, url)
+                if approved:
+                    print("\n✅ Approved. Proceeding...")
+                    process_qualifying_posting(client, posting_text, profile, score_data, url)
+                else:
+                    print("\n⏭️  Rejected. Logged to manual_review.log.")
+
+            # Auto-proceed
+            elif score >= 7:
+                process_qualifying_posting(client, posting_text, profile, score_data, url)
+
+            # Standard skip
             else:
-                # Step 4: Write the proposal
-                proposal = write_proposal(client, posting_text, profile, score_data)
-
-                # Step 5: Save proposal
-                saved_path = save_proposal(proposal, url, score)
-
-                print(f"\n{'='*60}")
-                print("PROPOSAL")
-                print(f"{'='*60}\n")
-                print(proposal)
-                print(f"\n{'='*60}")
-                print(f"✅ Proposal saved to: {saved_path}")
-
-                # Step 6: Tailor resume
-                job_title = extract_job_title(client, posting_text)
-                tailor_resume(posting_text, job_title, score)
+                log_skip(url, score, reason)
+                print(f"\n⏭️  Score below threshold. Skipped and logged.")
+                print(f"   Reason: {reason}")
 
         except Exception as e:
             print(f"\n❌ Something went wrong: {e}")
