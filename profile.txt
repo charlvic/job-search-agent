@@ -1,7 +1,7 @@
 # CRVTECH AGENT PROFILE
 # This document is the permanent memory of the CRVTech job application agent.
 # It is loaded before every proposal is written.
-# Last updated: June 2026
+# Last updated: July 2026
 
 ================================================================================
 IDENTITY
@@ -57,11 +57,32 @@ Fixed price: $500 minimum
 Premium positioning: $10,000–$15,000 per role per month for fractional engagements
 
 ================================================================================
-INDUSTRIES TO AVOID
+INDUSTRY GUIDANCE
 ================================================================================
+ACCEPTABLE INDUSTRIES (score normally):
+- Technology, SaaS, platforms
+- Healthcare and digital health
+- Retail, ecommerce, luxury
+- Media, entertainment, publishing
+- Travel, hospitality, airlines
+- Telecommunications
+- Financial services, fintech, banking, insurance
+  NOTE: Charles has relevant process/control/governance skills that map
+  well to financial services environments. He may actively prefer these
+  roles for their structured QA and compliance orientation.
+
+INDUSTRIES TO AVOID (hard skip):
 - Cryptocurrency / Web3 / Blockchain
 - Stock market trading platforms
-- High-frequency trading or adjacent fintech speculation domains
+- High-frequency trading or adjacent fintech speculation
+
+WORK/LIFE BALANCE FLAGS (flag for manual review, do not auto-skip):
+Watch for these signals in any posting, especially financial services:
+- "Always on" or "24/7" culture language
+- Excessive on-call requirements
+- Language suggesting unsustainable pace as a feature
+- No mention of PTO, flexibility, or work-life balance in a sector known for intensity
+Flag these postings with a note so Charles can make an informed decision.
 
 ================================================================================
 VOICE & TONE HIERARCHY
@@ -135,21 +156,76 @@ Instead: "When you're ready to move forward, I am." or a specific next-step offe
 ================================================================================
 FIT SCORING CRITERIA (for agent use)
 ================================================================================
-Score each posting 1–10. Only generate a proposal if score ≥ 7.
+Score each posting 1-10. Only generate a proposal if score is 7 or above.
+Manual review postings always pause for Charles regardless of score.
 
-+3  Core role match: CPO / CQO / CDO / Jira Admin / Atlassian
-+2  Rate is at or above floor ($50/hr or $500 fixed)
-+2  Industry is in Charles's client history (tech, pharma, media, travel, luxury)
-+1  Startup or VC-backed company (target client profile)
-+1  Mentions specific pain Charles solves (QA, SDLC, product ops, accessibility)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HARD SKIPS (score 0, no proposal generated):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Posting explicitly says applications are closed
+- Crypto / blockchain / stock trading / speculation domain
+- Rate below $50/hr or $500 fixed
+- Applicant count over 500
+- On-site only + far outside NJ/NYC + no exceptional compensating factors
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANUAL REVIEW TRIGGERS (pause and ask Charles):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Hard skip rule would apply BUT exceptional compensating factors present
+- On-site only BUT exceptional factors present
+- Outside NJ/NYC BUT exceptional factors present
+- Work/life balance red flags detected in any posting
+- LinkedIn URL (data quality — agent working from limited page view)
+Exceptional factors: salary $250k+, equity, Unlimited PTO, near-perfect skills match,
+                     highly prestigious or strategically valuable company
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LOCATION SCORING:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Remote:          +1
+Hybrid (NJ/NYC, ≤2 days): +0 acceptable
+Hybrid (>2 days or outside NJ/NYC): -1
+On-site:         -2 (never hard skip if compensating factors exist)
+Unknown/not stated: +0 neutral, flag in output
+NJ and NYC treated as equivalent. CT, PA, or other states: -1 additional.
+Far outside tri-state (Austin, Chicago, LA, Seattle) + on-site: hard skip
+unless exceptional factors trigger manual review.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+W2 TRADITIONAL ROLE SCORING:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Base W2:         -1
+Salary $185k–$249k: meets floor, no additional adjustment
+Salary $250k–$299k: +1 (offsets W2 penalty)
+Salary $300k+:   +2
+Unlimited PTO (W2 only): +1
+Both $300k+ AND Unlimited PTO: +2 total
+NEVER penalize W2 for lacking fractional option.
+Score W2 purely on traditional employment criteria.
+Fractional fit only relevant when posting explicitly mentions it.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCORE BOOSTERS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
++3  Core role match: CPO / Head of Product / VP Product / CQO / CDO /
+    Jira Admin / Atlassian / Product Director
++2  Rate at or above floor, or salary meets $185k+ threshold
++2  Industry in Charles's client history (tech, pharma, media, travel,
+    luxury, retail, financial services, fintech)
++1  Startup or VC-backed company
++1  Mentions specific pain Charles solves (QA, SDLC, product ops,
+    accessibility, Atlassian, governance)
 +1  Remote-friendly or location flexible
++1  Unlimited PTO mentioned (traditional W2 track only)
 
--3  Rate is below floor
--3  Crypto / blockchain / trading domain
--2  Requires full-time W2 only
--2  Highly specialized domain with no prior client history
--1  Very junior scope (does not warrant C-suite engagement)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+APPLICANT COUNT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Under 250:  no penalty
+250–500:    -2
+Over 500:   hard skip (score 0)
 
-LOG skipped postings with: URL, score, and primary reason for skip.
+LOG all skipped postings with: URL, score, and primary reason.
+LOG all manual review decisions with: URL, score, decision, conflict, factors.
 
 ================================================================================
