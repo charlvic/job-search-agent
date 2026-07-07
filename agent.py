@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.5.1 - Patch: JSON boundary extraction in score_fit to handle trailing content
+v0.5.2 - Patch: LinkedIn fetch fallback to manual paste when blocked
 """
 
 import os
@@ -48,12 +48,46 @@ def fetch_posting(url: str) -> str:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
         response = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
-        response.raise_for_status()
+
+        # Detect login wall or block
+        if response.status_code in (403, 401, 429):
+            return ""
+
         text = re.sub(r"<[^>]+>", " ", response.text)
         text = re.sub(r"\s+", " ", text).strip()
+
+        # Detect LinkedIn login wall in body
+        login_signals = [
+            "join now to see", "sign in", "authwall",
+            "join linkedin", "please log in", "create an account"
+        ]
+        if any(signal in text.lower()[:500] for signal in login_signals):
+            return ""
+
         return text[:6000]
     except Exception as e:
         raise RuntimeError(f"Could not fetch posting: {e}")
+
+# ── Prompt for manual paste when fetch is blocked ─────────────────────────────
+def prompt_for_paste() -> str:
+    print("\n🔒 LinkedIn requires login to view this posting.")
+    print("   The agent can't fetch it automatically.")
+    print("\n   Please do the following:")
+    print("   1. Open the LinkedIn posting in your browser")
+    print("   2. Select all the job description text")
+    print("   3. Paste it below, then type END on a new line and hit Enter\n")
+
+    lines = []
+    while True:
+        line = input()
+        if line.strip().upper() == "END":
+            break
+        lines.append(line)
+
+    text = "\n".join(lines).strip()
+    if not text:
+        raise ValueError("No job description text was entered.")
+    return text[:6000]
 
 # ── Score the fit ──────────────────────────────────────────────────────────────
 def score_fit(client: anthropic.Anthropic, posting_text: str, profile: str) -> dict:
@@ -370,7 +404,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.5.1")
+    print("  CRVTech Job Search Agent  v0.5.2")
     print("="*60)
 
     api_key = load_api_key()
@@ -392,8 +426,10 @@ def main():
         linkedin = is_linkedin_url(url)
 
         try:
-            # Step 1: Fetch
+            # Step 1: Fetch — fall back to manual paste if blocked
             posting_text = fetch_posting(url)
+            if not posting_text:
+                posting_text = prompt_for_paste()
 
             # Step 2: Score
             score_data      = score_fit(client, posting_text, profile)
