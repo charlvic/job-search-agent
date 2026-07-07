@@ -1,7 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.5.0 - Fix W2 scoring math, LinkedIn auto-manual-review,
-         finance domain correction, work/life balance flagging
+v0.5.1 - Patch: JSON boundary extraction in score_fit to handle trailing content
 """
 
 import os
@@ -188,6 +187,12 @@ Return JSON only — no preamble, no markdown, no commentary:
 
     raw = message.content[0].text.strip()
     raw = re.sub(r"```json|```", "", raw).strip()
+    # Extract JSON boundaries as safety net against trailing content
+    start = raw.find("{")
+    end   = raw.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError("Claude did not return a valid JSON object in score_fit")
+    raw = raw[start:end + 1]
     return json.loads(raw)
 
 # ── Manual review prompt ───────────────────────────────────────────────────────
@@ -365,7 +370,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.5.0")
+    print("  CRVTech Job Search Agent  v0.5.1")
     print("="*60)
 
     api_key = load_api_key()
