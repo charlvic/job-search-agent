@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * CRVTech Resume Tailor
+ * CRVTech Resume Tailor v0.4.0
  * Reads resume_canonical.docx, tailors content to a job posting,
  * and writes a new .docx file preserving all original formatting.
  *
- * Usage: node tailor_resume.js <job_posting_text> <output_filename>
+ * Usage: node tailor_resume.js <posting_file_path> <output_filename>
  */
 
 const {
-  Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
-  AlignmentType, LevelFormat, BorderStyle, WidthType, ShadingType,
+  Document, Packer, Paragraph, TextRun,
+  AlignmentType, LevelFormat, BorderStyle,
   ExternalHyperlink, UnderlineType
 } = require("docx");
 
@@ -18,33 +18,34 @@ const path = require("path");
 const http = require("https");
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const BASE_DIR    = __dirname;
-const ENV_FILE    = path.join(BASE_DIR, "config", ".env");
-const PROFILE     = path.join(BASE_DIR, "profile.txt");
-const OUTPUT_DIR  = path.join(BASE_DIR, "data", "resumes");
+const BASE_DIR   = __dirname;
+const ENV_FILE   = path.join(BASE_DIR, "config", ".env");
+const PROFILE    = path.join(BASE_DIR, "profile.txt");
+const OUTPUT_DIR = path.join(BASE_DIR, "data", "resumes");
 
-// ── Load API key ──────────────────────────────────────────────────────────────
+// ── Load API key ───────────────────────────────────────────────────────────────
 function loadApiKey() {
-  const env = fs.readFileSync(ENV_FILE, "utf8");
+  const env   = fs.readFileSync(ENV_FILE, "utf8");
   const match = env.match(/ANTHROPIC_API_KEY=(.+)/);
   if (!match) throw new Error("ANTHROPIC_API_KEY not found in .env");
   return match[1].trim();
 }
 
-// ── Call Claude API ───────────────────────────────────────────────────────────
-function callClaude(apiKey, prompt) {
+// ── Call Claude API ────────────────────────────────────────────────────────────
+function callClaude(apiKey, systemPrompt, userPrompt) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      model: "claude-sonnet-4-6",
+      model:      "claude-sonnet-4-6",
       max_tokens: 4000,
-      messages: [{ role: "user", content: prompt }]
+      system:     systemPrompt,
+      messages:   [{ role: "user", content: userPrompt }]
     });
 
     const options = {
       hostname: "api.anthropic.com",
-      path: "/v1/messages",
-      method: "POST",
-      headers: {
+      path:     "/v1/messages",
+      method:   "POST",
+      headers:  {
         "Content-Type":      "application/json",
         "x-api-key":         apiKey,
         "anthropic-version": "2023-06-01",
@@ -72,12 +73,17 @@ function callClaude(apiKey, prompt) {
   });
 }
 
-// ── Generate tailored content via Claude ──────────────────────────────────────
+// ── Generate tailored content ──────────────────────────────────────────────────
 async function getTailoredContent(apiKey, jobPosting, profile) {
   console.log("🧠 Generating tailored resume content...");
 
-  const prompt = `
-You are tailoring Charles Vickers' resume for a specific job posting.
+  // Strong system prompt enforcing JSON-only output
+  const systemPrompt = `You are a resume tailoring engine. You output ONLY valid JSON. 
+You never explain yourself. You never ask questions. You never add commentary.
+Your entire response must be a single valid JSON object and nothing else.
+No markdown. No backticks. No preamble. No postamble. JSON only.`;
+
+  const userPrompt = `Tailor Charles Vickers' resume for this job posting.
 
 CHARLES'S PROFILE AND BACKSTORY:
 ${profile}
@@ -122,7 +128,7 @@ Publicis Groupe (Rauxa / Razorfish) - Product Director, New York, NY | Sept 2019
 - Acted as Atlassian Product Owner and SuperAdmin, standardizing Jira/Confluence projects, workflows and dashboards for visibility into roadmap, delivery, and risk
 - Integrated AI tools into discovery, design, and testing workflows to improve team throughput by ~30%
 - Partnered with account and sales leadership to craft product visions and ROI-backed roadmaps that helped secure $155M+ in new business
-- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements (performance, security, accessibility)
+- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements
 - Established outcome-oriented metrics and OKRs for key products and used analytics to inform roadmap adjustments and experiment design
 
 Valtech - Product Lead & Technology Director, New York, NY | March 2014 – August 2019
@@ -153,14 +159,14 @@ ${jobPosting}
 
 TAILORING RULES:
 1. HEADLINE: Adjust to mirror the job title/seniority in the posting
-2. SUMMARY: Full rewrite. Max 4-5 lines. Lead with most relevant identity. Mirror posting's priority language. No filler. Must be tight and punchy.
-3. HIGHLIGHTS: Reorder to surface most relevant first. You may rewrite highlight bullets to better mirror posting language while keeping the same spirit and facts.
-4. KEY DELIVERIES: Reorder most relevant first. Mirror posting vocabulary where it naturally fits. Never change the actual outcomes or numbers.
-5. WORK HISTORY BULLETS: Same facts and outcomes, but mirror the posting's language and priorities where applicable. Do not change company names, titles, dates, or actual results.
-6. CORE COMPETENCIES: Reorder within each subsection to front-load skills the posting calls out. Add specific tools/frameworks from the posting if Charles genuinely has them.
+2. SUMMARY: Full rewrite. Max 4-5 lines. Lead with most relevant identity. Mirror posting's priority language. Tight and punchy. No filler.
+3. HIGHLIGHTS: Reorder most relevant first. Rewrite bullets to mirror posting language while keeping same spirit and facts.
+4. KEY DELIVERIES: Reorder most relevant first. Mirror posting vocabulary where it naturally fits. Never change actual outcomes or numbers.
+5. WORK HISTORY BULLETS: Same facts and outcomes, mirror posting language and priorities. Do not change company names, titles, dates, or actual results.
+6. CORE COMPETENCIES: Reorder within each subsection to front-load skills the posting calls out. Add specific tools from posting if Charles genuinely has them.
 7. 3-PAGE RULE: Budget copy length carefully. Summary must not exceed 5 lines. Tighten bullet language if needed. Never cut jobs, sections, education, or certifications.
 
-Return ONLY a JSON object with this exact structure — no preamble, no markdown fences:
+Return a single valid JSON object with this exact structure:
 {
   "headline": "string",
   "summary": "string",
@@ -184,55 +190,48 @@ Return ONLY a JSON object with this exact structure — no preamble, no markdown
   }
 }`;
 
-  const raw = await callClaude(apiKey, prompt);
-  // Strip markdown fences if present
-  const clean = raw.replace(/```json|```/g, "").trim();
+  const raw = await callClaude(apiKey, systemPrompt, userPrompt);
+
+  // Aggressively strip any markdown or surrounding text
+  let clean = raw.trim();
+  clean = clean.replace(/^```json\s*/i, "").replace(/^```\s*/i, "");
+  clean = clean.replace(/\s*```$/i, "");
+
+  // Find the JSON object boundaries as a final safety net
+  const start = clean.indexOf("{");
+  const end   = clean.lastIndexOf("}");
+  if (start === -1 || end === -1) {
+    throw new Error("Claude did not return a valid JSON object. Raw response: " + raw.substring(0, 200));
+  }
+  clean = clean.substring(start, end + 1);
+
   return JSON.parse(clean);
 }
 
-// ── Drop shadow effect (matches original) ─────────────────────────────────────
-// Note: docx-js doesn't support w14:shadow natively so we approximate
-// with the accent color styling which is the dominant visual element
-
-// ── Build the Word document ───────────────────────────────────────────────────
+// ── Build the Word document ────────────────────────────────────────────────────
 async function buildDocument(content, outputPath) {
   console.log("📄 Building Word document...");
 
-  // ── Color constants (extracted from original XML) ──────────────────────────
-  const ACCENT_BLUE  = "156082";  // Section headers and name
-  const BODY_BLACK   = "000000";  // Body text
+  const ACCENT_BLUE = "156082";
+  const BODY_BLACK  = "000000";
 
-  // ── Reusable style builders ────────────────────────────────────────────────
   const headerRun = (text) => new TextRun({
-    text,
-    bold: true,
-    color: ACCENT_BLUE,
-    font: "Aptos Display",
-    size: 24
+    text, bold: true, color: ACCENT_BLUE, font: "Aptos Display", size: 24
   });
 
   const nameRun = (text) => new TextRun({
-    text,
-    bold: true,
-    color: ACCENT_BLUE,
-    font: "Aptos Display",
-    size: 36
+    text, bold: true, color: ACCENT_BLUE, font: "Aptos Display", size: 36
   });
 
   const bodyRun = (text, opts = {}) => new TextRun({
-    text,
-    font: "Aptos",
-    size: 24,
+    text, font: "Aptos", size: 24,
     bold: opts.bold || false,
     italics: opts.italics || false,
     color: BODY_BLACK
   });
 
   const smallRun = (text) => new TextRun({
-    text,
-    font: "Aptos",
-    size: 22,
-    color: BODY_BLACK
+    text, font: "Aptos", size: 22, color: BODY_BLACK
   });
 
   const blankLine = () => new Paragraph({
@@ -254,7 +253,6 @@ async function buildDocument(content, outputPath) {
     numbering: { reference: "bullets", level: 0 }
   });
 
-  // ── Document children ──────────────────────────────────────────────────────
   const children = [];
 
   // Name
@@ -269,7 +267,7 @@ async function buildDocument(content, outputPath) {
     spacing: { after: 0 }
   }));
 
-  // Contact line
+  // Contact
   children.push(new Paragraph({
     children: [
       smallRun("Bloomfield, NJ | 973.698.6714 | "),
@@ -304,28 +302,22 @@ async function buildDocument(content, outputPath) {
     children: [bodyRun(content.summary)],
     spacing: { after: 0 }
   }));
-
   children.push(blankLine());
 
   // HIGHLIGHTS
   children.push(sectionHeader("HIGHLIGHTS"));
   content.highlights.forEach(h => children.push(bulletPara(h)));
-
   children.push(blankLine());
 
-  // KEY PRODUCT DELIVERIES
+  // KEY DELIVERIES
   children.push(sectionHeader("KEY PRODUCT DELIVERIES & IMPACT"));
   content.key_deliveries.forEach(d => {
     children.push(new Paragraph({
-      children: [
-        bodyRun(d.title + " – ", { bold: false }),
-        bodyRun(d.description)
-      ],
+      children: [bodyRun(d.title + " – "), bodyRun(d.description)],
       spacing: { after: 0 },
       numbering: { reference: "bullets", level: 0 }
     }));
   });
-
   children.push(blankLine());
 
   // PROFESSIONAL EXPERIENCE
@@ -336,86 +328,68 @@ async function buildDocument(content, outputPath) {
   children.push(new Paragraph({
     children: [
       bodyRun("CRVTech LLC", { bold: true }),
-      bodyRun(" - ", { bold: true }),
-      bodyRun("Founder & Principal Consultant", { bold: true }),
-      bodyRun(", Bloomfield, NJ", { bold: true }),
-      bodyRun(" | Sept 2025 – Present", { bold: true })
+      bodyRun(" - Founder & Principal Consultant, Bloomfield, NJ | Sept 2025 – Present", { bold: true })
     ],
     spacing: { after: 0 }
   }));
   content.crvtech_bullets.forEach(b => children.push(bulletPara(b)));
-
   children.push(blankLine());
 
   // Publicis
   children.push(new Paragraph({
     children: [
       bodyRun("Publicis Groupe (Rauxa / Razorfish)", { bold: true }),
-      bodyRun(" - ", { bold: true }),
-      bodyRun("Product Director", { bold: true }),
-      bodyRun(", New York, NY", { bold: true }),
-      bodyRun(" | Sept 2019 – Sept 2025", { bold: true })
+      bodyRun(" - Product Director, New York, NY | Sept 2019 – Sept 2025", { bold: true })
     ],
     spacing: { after: 0 }
   }));
   content.publicis_bullets.forEach(b => children.push(bulletPara(b)));
-
   children.push(blankLine());
 
   // Valtech
   children.push(new Paragraph({
     children: [
       bodyRun("Valtech", { bold: true }),
-      bodyRun(" - ", { bold: true }),
-      bodyRun("Product Lead & Technology Director", { bold: true }),
-      bodyRun(", New York, NY", { bold: true }),
-      bodyRun(" | March 2014 – August 2019", { bold: true })
+      bodyRun(" - Product Lead & Technology Director, New York, NY | March 2014 – August 2019", { bold: true })
     ],
     spacing: { after: 0 }
   }));
   content.valtech_bullets.forEach(b => children.push(bulletPara(b)));
-
   children.push(blankLine());
 
   // EDUCATION
   children.push(sectionHeader("EDUCATION"));
   children.push(bulletPara("Bachelor's Coursework in Computer Science – Bloomfield College, NJ | 2001"));
   children.push(bulletPara("Certified Cisco Networking Associate Program"));
-
   children.push(blankLine());
 
   // CERTIFICATIONS
   children.push(sectionHeader("CERTIFICATIONS"));
   children.push(bulletPara("Accessibility Fundamentals Certificate – International Association of Accessibility Professionals (IAAP) | Expected 2026"));
-
   children.push(blankLine());
 
   // CORE COMPETENCIES
   children.push(sectionHeader("CORE COMPETENCIES & SKILLS"));
   children.push(blankLine());
 
-  const competencySection = (label, content_text) => [
+  const competencyBlock = (label, text) => [
     new Paragraph({
       children: [bodyRun(label + ":", { bold: true })],
       spacing: { after: 0 }
     }),
     new Paragraph({
-      children: [bodyRun(content_text)],
+      children: [bodyRun(text)],
       spacing: { after: 0 }
     }),
     blankLine()
   ];
 
-  competencySection("Product Strategy & Discovery", content.competencies.strategy)
-    .forEach(p => children.push(p));
-  competencySection("Execution & Product Operations", content.competencies.execution)
-    .forEach(p => children.push(p));
-  competencySection("Tools & Technology", content.competencies.tools)
-    .forEach(p => children.push(p));
-  competencySection("Accessibility, Quality & AI (Superpowers)", content.competencies.accessibility)
-    .forEach(p => children.push(p));
+  competencyBlock("Product Strategy & Discovery", content.competencies.strategy).forEach(p => children.push(p));
+  competencyBlock("Execution & Product Operations", content.competencies.execution).forEach(p => children.push(p));
+  competencyBlock("Tools & Technology", content.competencies.tools).forEach(p => children.push(p));
+  competencyBlock("Accessibility, Quality & AI (Superpowers)", content.competencies.accessibility).forEach(p => children.push(p));
 
-  // ── Assemble document ──────────────────────────────────────────────────────
+  // Assemble
   const doc = new Document({
     numbering: {
       config: [{
@@ -456,17 +430,16 @@ async function buildDocument(content, outputPath) {
   console.log(`✅ Resume saved to: ${outputPath}`);
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────────
 async function main() {
-  const jobPosting  = process.argv[2];
+  const postingFile = process.argv[2];
   const outputFile  = process.argv[3];
 
-  if (!jobPosting || !outputFile) {
-    console.error("Usage: node tailor_resume.js <job_posting_text> <output_filename>");
+  if (!postingFile || !outputFile) {
+    console.error("Usage: node tailor_resume.js <posting_file_path> <output_filename>");
     process.exit(1);
   }
 
-  // Ensure output directory exists
   if (!fs.existsSync(OUTPUT_DIR)) {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   }
@@ -474,6 +447,7 @@ async function main() {
   const outputPath = path.join(OUTPUT_DIR, outputFile);
   const apiKey     = loadApiKey();
   const profile    = fs.readFileSync(PROFILE, "utf8");
+  const jobPosting = fs.readFileSync(postingFile, "utf8");
 
   try {
     const content = await getTailoredContent(apiKey, jobPosting, profile);
