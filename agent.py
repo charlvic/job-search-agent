@@ -1,6 +1,7 @@
 """
 CRVTech Job Search Agent
-v0.5.3 - Patch: Detect JS-heavy LinkedIn responses and trigger paste fallback
+v0.6.0 - Token usage tracking: pre-run estimate, post-run actual,
+         daily total, monthly pace warning, usage.log
 """
 
 import os
@@ -10,7 +11,7 @@ import httpx
 import anthropic
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -21,7 +22,136 @@ PROPOSALS  = BASE_DIR / "data" / "proposals"
 RESUMES    = BASE_DIR / "data" / "resumes"
 SKIP_LOG   = BASE_DIR / "data" / "skipped_jobs.log"
 MANUAL_LOG = BASE_DIR / "data" / "manual_review.log"
+USAGE_LOG  = BASE_DIR / "data" / "usage.log"
 TAILOR_JS  = BASE_DIR / "tailor_resume.js"
+
+# ── Pricing (Claude Sonnet 4.6 per million tokens) ────────────────────────────
+INPUT_COST_PER_M  = 3.00   # $3.00 per million input tokens
+OUTPUT_COST_PER_M = 15.00  # $15.00 per million output tokens
+
+# ── Warning thresholds ─────────────────────────────────────────────────────────
+SINGLE_RUN_WARN   = 0.25   # Warn + confirm if single run estimate exceeds $0.25
+MONTHLY_WARN      = 20.00  # Warn if monthly pace exceeds $20.00
+
+# ── Token cost calculator ──────────────────────────────────────────────────────
+def calc_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens / 1_000_000 * INPUT_COST_PER_M +
+            output_tokens / 1_000_000 * OUTPUT_COST_PER_M)
+
+# ── Estimate tokens before a call ─────────────────────────────────────────────
+def estimate_tokens(text: str) -> int:
+    """Rough estimate: ~0.75 tokens per character / 4 chars per token."""
+    return max(1, len(text) // 4)
+
+# ── Pre-run cost estimate and confirmation ─────────────────────────────────────
+def check_estimated_cost(profile: str, posting_text: str) -> bool:
+    """
+    Estimate total cost for a full run (score + proposal + resume tailor).
+    Warn and ask for confirmation if estimate exceeds SINGLE_RUN_WARN.
+    Returns True to proceed, False to abort.
+    """
+    # Rough token estimates for each call
+    score_input    = estimate_tokens(profile + posting_text) + 500   # prompt overhead
+    score_output   = 300
+    proposal_input = estimate_tokens(profile + posting_text) + 300
+    proposal_output= 600
+    resume_input   = estimate_tokens(profile + posting_text) + 400
+    resume_output  = 2000
+    title_input    = 300
+    title_output   = 20
+
+    total_input  = score_input + proposal_input + resume_input + title_input
+    total_output = score_output + proposal_output + resume_output + title_output
+    est_cost     = calc_cost(total_input, total_output)
+
+    print(f"\n💰 Estimated run cost: ${est_cost:.4f}  "
+          f"(~{total_input:,} input + ~{total_output:,} output tokens)")
+
+    if est_cost > SINGLE_RUN_WARN:
+        print(f"\n⚠️  COST WARNING: This run may exceed ${SINGLE_RUN_WARN:.2f}")
+        print(f"   Proceed anyway? (yes / no):")
+        while True:
+            choice = input("> ").strip().lower()
+            if choice in ("yes", "y"):
+                return True
+            elif choice in ("no", "n"):
+                print("   Run cancelled.")
+                return False
+            else:
+                print("   Please type yes or no:")
+
+    return True
+
+# ── Log usage after a run ──────────────────────────────────────────────────────
+def log_usage(url: str, input_tokens: int, output_tokens: int, action: str):
+    USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    cost      = calc_cost(input_tokens, output_tokens)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry     = (
+        f"[{timestamp}] {action} | "
+        f"in={input_tokens} out={output_tokens} | "
+        f"cost=${cost:.4f} | {url}\n"
+    )
+    with open(USAGE_LOG, "a") as f:
+        f.write(entry)
+    return cost
+
+# ── Read usage log for daily/monthly totals ────────────────────────────────────
+def read_usage_totals() -> dict:
+    """Returns today's total cost and this month's total cost from usage.log."""
+    if not USAGE_LOG.exists():
+        return {"today": 0.0, "month": 0.0, "today_runs": 0, "month_runs": 0}
+
+    today_str = date.today().strftime("%Y-%m-%d")
+    month_str = date.today().strftime("%Y-%m")
+
+    today_cost  = 0.0
+    month_cost  = 0.0
+    today_runs  = 0
+    month_runs  = 0
+
+    for line in USAGE_LOG.read_text().splitlines():
+        if not line.strip():
+            continue
+        # Extract date and cost from log line format
+        date_match = re.search(r"\[(\d{4}-\d{2}-\d{2})", line)
+        cost_match = re.search(r"cost=\$([0-9.]+)", line)
+        if not date_match or not cost_match:
+            continue
+        log_date = date_match.group(1)
+        log_cost = float(cost_match.group(1))
+
+        if log_date == today_str:
+            today_cost += log_cost
+            today_runs += 1
+        if log_date.startswith(month_str):
+            month_cost += log_cost
+            month_runs += 1
+
+    return {
+        "today": today_cost,
+        "month": month_cost,
+        "today_runs": today_runs,
+        "month_runs": month_runs
+    }
+
+# ── Print post-run usage summary ──────────────────────────────────────────────
+def print_usage_summary(run_cost: float, totals: dict):
+    days_in_month  = 30
+    today_day      = date.today().day
+    monthly_pace   = (totals["month"] / max(today_day, 1)) * days_in_month
+
+    print(f"\n{'─'*60}")
+    print(f"💰 This run:      ${run_cost:.4f}")
+    print(f"   Today total:   ${totals['today']:.4f}  ({totals['today_runs']} run(s))")
+    print(f"   Month total:   ${totals['month']:.4f}  ({totals['month_runs']} run(s))")
+    print(f"   Monthly pace:  ${monthly_pace:.2f} / month")
+
+    if monthly_pace > MONTHLY_WARN:
+        print(f"\n⚠️  MONTHLY PACE WARNING: On track for ${monthly_pace:.2f} this month")
+        print(f"   Budget threshold is ${MONTHLY_WARN:.2f}. Consider reducing run frequency.")
+
+    print(f"{'─'*60}")
 
 # ── Load API key ───────────────────────────────────────────────────────────────
 def load_api_key():
@@ -49,14 +179,12 @@ def fetch_posting(url: str) -> str:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
         response = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
 
-        # Detect hard blocks
         if response.status_code in (403, 401, 429):
             return ""
 
         text = re.sub(r"<[^>]+>", " ", response.text)
         text = re.sub(r"\s+", " ", text).strip()
 
-        # Detect login wall signals
         login_signals = [
             "join now to see", "sign in", "authwall",
             "join linkedin", "please log in", "create an account"
@@ -64,11 +192,8 @@ def fetch_posting(url: str) -> str:
         if any(signal in text.lower()[:500] for signal in login_signals):
             return ""
 
-        # Detect JavaScript-heavy response (page didn't render properly)
-        js_signals = [
-            "function ", "window.", "const ", "let ", "var ",
-            "getDfd()", "Promise(", "=>{"
-        ]
+        js_signals = ["function ", "window.", "const ", "let ", "var ",
+                      "getDfd()", "Promise(", "=>{"]
         js_count = sum(1 for signal in js_signals if signal in text[:500])
         if js_count >= 2:
             return ""
@@ -77,7 +202,7 @@ def fetch_posting(url: str) -> str:
     except Exception as e:
         raise RuntimeError(f"Could not fetch posting: {e}")
 
-# ── Prompt for manual paste when fetch is blocked ─────────────────────────────
+# ── Prompt for manual paste ────────────────────────────────────────────────────
 def prompt_for_paste() -> str:
     print("\n🔒 LinkedIn requires login to view this posting.")
     print("   The agent can't fetch it automatically.")
@@ -99,7 +224,8 @@ def prompt_for_paste() -> str:
     return text[:6000]
 
 # ── Score the fit ──────────────────────────────────────────────────────────────
-def score_fit(client: anthropic.Anthropic, posting_text: str, profile: str) -> dict:
+def score_fit(client: anthropic.Anthropic, posting_text: str, profile: str) -> tuple[dict, int, int]:
+    """Returns (score_data, input_tokens, output_tokens)"""
     print("🧠 Scoring fit against your profile...")
 
     prompt = f"""
@@ -128,7 +254,7 @@ MANUAL REVIEW — set manual_review: true when:
 - Hard skip would apply BUT exceptional factors present
 - On-site only BUT exceptional factors present
 - Outside NJ/NYC BUT exceptional factors present
-- Work/life balance red flags detected (always-on culture, 24/7 language, no flexibility signals)
+- Work/life balance red flags detected
 ALWAYS return the real calculated score when manual_review is true. Never return 0.
 
 ════════════════════════════════════════
@@ -166,15 +292,12 @@ INDUSTRY:
 ACCEPTABLE (score +2 for industry match):
   Tech, SaaS, healthcare, retail, ecommerce, luxury, media, travel,
   telecom, financial services, fintech, banking, insurance
-  NOTE: Charles's QA governance and process/control skills map
-  well to financial services. Score these roles normally.
 
 HARD SKIP industries:
   Crypto, blockchain, stock trading, high-frequency trading, speculation
 
 WORK/LIFE BALANCE FLAGS (trigger manual_review):
-  Look for: "always on", "24/7", excessive on-call, no flexibility signals,
-  "wear many hats" in intensity context, finance roles with no WLB mention.
+  Look for: "always on", "24/7", excessive on-call, no flexibility signals
 
 ════════════════════════════════════════
 SCORE BOOSTERS:
@@ -196,14 +319,6 @@ Under 250: no penalty
 250–500:   -2
 Over 500:  hard skip
 
-════════════════════════════════════════
-THRESHOLD:
-════════════════════════════════════════
-7+  = auto-proceed
-4–6 = skip and log
-0   = hard skip and log
-manual_review = true always pauses for Charles
-
 Show your scoring math clearly in the reason field.
 Return JSON only — no preamble, no markdown, no commentary:
 {{
@@ -224,19 +339,21 @@ Return JSON only — no preamble, no markdown, no commentary:
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=700,
+        max_tokens=1200,
         messages=[{"role": "user", "content": prompt}]
     )
 
+    input_tokens  = message.usage.input_tokens
+    output_tokens = message.usage.output_tokens
+
     raw = message.content[0].text.strip()
     raw = re.sub(r"```json|```", "", raw).strip()
-    # Extract JSON boundaries as safety net against trailing content
     start = raw.find("{")
     end   = raw.rfind("}")
     if start == -1 or end == -1:
-        raise ValueError("Claude did not return a valid JSON object in score_fit")
+        raise ValueError(f"Claude did not return valid JSON in score_fit.\nRaw:\n{raw[:300]}")
     raw = raw[start:end + 1]
-    return json.loads(raw)
+    return json.loads(raw), input_tokens, output_tokens
 
 # ── Manual review prompt ───────────────────────────────────────────────────────
 def prompt_manual_review(score_data: dict, url: str, is_linkedin: bool = False) -> bool:
@@ -247,9 +364,7 @@ def prompt_manual_review(score_data: dict, url: str, is_linkedin: bool = False) 
 
     if is_linkedin:
         print(f"   ⚠️  Data note:   LinkedIn posting — agent working from limited")
-        print(f"                   page view due to login wall. Full details may")
-        print(f"                   differ from what was scored. Review the live")
-        print(f"                   posting before deciding.")
+        print(f"                   page view. Review the live posting before deciding.")
 
     print(f"   Conflict:       {score_data['manual_review_reason']}")
 
@@ -292,7 +407,8 @@ def log_manual_review(url: str, score_data: dict, decision: str):
         f.write(entry)
 
 # ── Write proposal ─────────────────────────────────────────────────────────────
-def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str, score_data: dict) -> str:
+def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str, score_data: dict) -> tuple[str, int, int]:
+    """Returns (proposal_text, input_tokens, output_tokens)"""
     print("✍️  Writing tailored proposal...")
 
     tone_instructions = {
@@ -334,7 +450,7 @@ Write the proposal now:
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return message.content[0].text.strip()
+    return message.content[0].text.strip(), message.usage.input_tokens, message.usage.output_tokens
 
 # ── Save proposal ──────────────────────────────────────────────────────────────
 def save_proposal(proposal: str, url: str, score: int, is_mr: bool = False) -> Path:
@@ -382,7 +498,8 @@ def tailor_resume(posting_text: str, job_title: str, score: int, is_mr: bool = F
         os.unlink(tmp_path)
 
 # ── Extract job title ──────────────────────────────────────────────────────────
-def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> str:
+def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[str, int, int]:
+    """Returns (title, input_tokens, output_tokens)"""
     message = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=50,
@@ -391,14 +508,22 @@ def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> str:
             "content": f"Extract only the job title from this posting. Return the title only:\n\n{posting_text[:1000]}"
         }]
     )
-    return message.content[0].text.strip()
+    return message.content[0].text.strip(), message.usage.input_tokens, message.usage.output_tokens
 
 # ── Process qualifying posting ─────────────────────────────────────────────────
-def process_qualifying_posting(client, posting_text, profile, score_data, url, is_mr=False):
-    score     = score_data["score"]
-    proposal  = write_proposal(client, posting_text, profile, score_data)
-    saved     = save_proposal(proposal, url, score, is_mr)
-    label     = f"{score}/10 (Manual Review)" if is_mr else f"{score}/10"
+def process_qualifying_posting(client, posting_text, profile, score_data, url, is_mr=False) -> tuple[int, int]:
+    """Returns (total_input_tokens, total_output_tokens) for this processing run."""
+    score = score_data["score"]
+
+    total_in  = 0
+    total_out = 0
+
+    proposal, p_in, p_out = write_proposal(client, posting_text, profile, score_data)
+    total_in  += p_in
+    total_out += p_out
+
+    saved = save_proposal(proposal, url, score, is_mr)
+    label = f"{score}/10 (Manual Review)" if is_mr else f"{score}/10"
 
     print(f"\n{'='*60}")
     print("PROPOSAL")
@@ -407,13 +532,18 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
     print(f"\n{'='*60}")
     print(f"✅ Proposal saved to: {saved}  [{label}]")
 
-    job_title = extract_job_title(client, posting_text)
+    job_title, t_in, t_out = extract_job_title(client, posting_text)
+    total_in  += t_in
+    total_out += t_out
+
     tailor_resume(posting_text, job_title, score, is_mr)
+
+    return total_in, total_out
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.5.3")
+    print("  CRVTech Job Search Agent  v0.6.0")
     print("="*60)
 
     api_key = load_api_key()
@@ -440,8 +570,19 @@ def main():
             if not posting_text:
                 posting_text = prompt_for_paste()
 
-            # Step 2: Score
-            score_data      = score_fit(client, posting_text, profile)
+            # Step 2: Pre-run cost estimate + confirmation
+            proceed = check_estimated_cost(profile, posting_text)
+            if not proceed:
+                continue
+
+            # Step 3: Score — track tokens
+            total_in  = 0
+            total_out = 0
+
+            score_data, s_in, s_out = score_fit(client, posting_text, profile)
+            total_in  += s_in
+            total_out += s_out
+
             score           = score_data["score"]
             reason          = score_data["reason"]
             tone            = score_data.get("tone", "direct_confident")
@@ -453,19 +594,19 @@ def main():
             factors         = score_data.get("exceptional_factors", [])
             wlb_flags       = score_data.get("wlb_flags", [])
 
-            # Force manual review for all LinkedIn URLs
+            # Force manual review for LinkedIn URLs
             if linkedin and not manual_review:
                 manual_review = True
                 score_data["manual_review"] = True
                 score_data["manual_review_reason"] = (
                     score_data.get("manual_review_reason") or
-                    "LinkedIn posting — agent working from limited page view due to login wall. "
-                    "Full posting details may differ from what was scored."
+                    "LinkedIn posting — agent working from limited page view. "
+                    "Review the live posting before deciding."
                 )
 
             score_label = f"{score}/10 (Manual Review)" if manual_review else f"{score}/10"
 
-            # ── Output ────────────────────────────────────────────────────────
+            # ── Score output ───────────────────────────────────────────────────
             print(f"\n📊 Fit Score:    {score_label}")
             print(f"   Reason:      {reason}")
             print(f"   Tone:        {tone}")
@@ -476,32 +617,47 @@ def main():
             if wlb_flags:
                 print(f"   ⚠️  WLB flags: {', '.join(wlb_flags)}")
 
-            # ── Routing ───────────────────────────────────────────────────────
+            # ── Routing ────────────────────────────────────────────────────────
+            action = "score_only"
 
-            # Manual review always takes priority
             if manual_review:
                 approved = prompt_manual_review(score_data, url, is_linkedin=linkedin)
                 if approved:
                     print("\n✅ Approved. Proceeding...")
-                    process_qualifying_posting(client, posting_text, profile, score_data, url, is_mr=True)
+                    p_in, p_out = process_qualifying_posting(
+                        client, posting_text, profile, score_data, url, is_mr=True
+                    )
+                    total_in  += p_in
+                    total_out += p_out
+                    action = "manual_review_approved"
                 else:
                     print("\n⏭️  Rejected. Logged to manual_review.log.")
+                    action = "manual_review_rejected"
 
-            # Hard skip
             elif score == 0:
                 log_skip(url, score, skip_reason or reason)
                 print(f"\n🚫 Hard skip. Logged.")
                 print(f"   Reason: {skip_reason or reason}")
+                action = "hard_skip"
 
-            # Auto-proceed
             elif score >= 7:
-                process_qualifying_posting(client, posting_text, profile, score_data, url)
+                p_in, p_out = process_qualifying_posting(
+                    client, posting_text, profile, score_data, url
+                )
+                total_in  += p_in
+                total_out += p_out
+                action = "auto_proceed"
 
-            # Standard skip
             else:
                 log_skip(url, score, reason)
                 print(f"\n⏭️  Score below threshold. Skipped and logged.")
                 print(f"   Reason: {reason}")
+                action = "skip"
+
+            # ── Post-run usage summary ─────────────────────────────────────────
+            run_cost = log_usage(url, total_in, total_out, action)
+            totals   = read_usage_totals()
+            print_usage_summary(run_cost, totals)
 
         except Exception as e:
             print(f"\n❌ Something went wrong: {e}")
