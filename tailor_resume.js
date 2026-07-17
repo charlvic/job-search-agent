@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 /**
- * CRVTech Resume Tailor v0.4.0
- * Reads resume_canonical.docx, tailors content to a job posting,
- * and writes a new .docx file preserving all original formatting.
+ * CRVTech Resume Tailor v0.7.0
+ * Full formatting overhaul to match canonical resume spec exactly.
  *
  * Usage: node tailor_resume.js <posting_file_path> <output_filename>
  */
 
 const {
   Document, Packer, Paragraph, TextRun,
-  AlignmentType, LevelFormat, BorderStyle,
+  AlignmentType, LevelFormat,
   ExternalHyperlink, UnderlineType
 } = require("docx");
 
@@ -22,6 +21,19 @@ const BASE_DIR   = __dirname;
 const ENV_FILE   = path.join(BASE_DIR, "config", ".env");
 const PROFILE    = path.join(BASE_DIR, "profile.txt");
 const OUTPUT_DIR = path.join(BASE_DIR, "data", "resumes");
+
+// ── Color constants (from canonical resume spec) ───────────────────────────────
+const BLUE        = "156082";   // Name, section headers, competency labels
+const DARK_GRAY   = "404040";   // Experience company/title text
+const HYPERLINK   = "467886";   // Hyperlink color
+const BODY_BLACK  = "000000";   // All body text
+
+// ── DXA unit helpers (1 inch = 1440 DXA, 1 pt = 20 DXA) ──────────────────────
+const PT  = (n) => n * 20;      // points → DXA
+const IN  = (n) => n * 1440;    // inches → DXA
+
+// ── Line spacing: 115% = 276 twips (line spacing uses 240 = 100%) ─────────────
+const LINE_115 = { line: 276, lineRule: "auto" };
 
 // ── Load API key ───────────────────────────────────────────────────────────────
 function loadApiKey() {
@@ -77,8 +89,7 @@ function callClaude(apiKey, systemPrompt, userPrompt) {
 async function getTailoredContent(apiKey, jobPosting, profile) {
   console.log("🧠 Generating tailored resume content...");
 
-  // Strong system prompt enforcing JSON-only output
-  const systemPrompt = `You are a resume tailoring engine. You output ONLY valid JSON. 
+  const systemPrompt = `You are a resume tailoring engine. You output ONLY valid JSON.
 You never explain yourself. You never ask questions. You never add commentary.
 Your entire response must be a single valid JSON object and nothing else.
 No markdown. No backticks. No preamble. No postamble. JSON only.`;
@@ -128,7 +139,7 @@ Publicis Groupe (Rauxa / Razorfish) - Product Director, New York, NY | Sept 2019
 - Acted as Atlassian Product Owner and SuperAdmin, standardizing Jira/Confluence projects, workflows and dashboards for visibility into roadmap, delivery, and risk
 - Integrated AI tools into discovery, design, and testing workflows to improve team throughput by ~30%
 - Partnered with account and sales leadership to craft product visions and ROI-backed roadmaps that helped secure $155M+ in new business
-- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements
+- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements (performance, security, accessibility)
 - Established outcome-oriented metrics and OKRs for key products and used analytics to inform roadmap adjustments and experiment design
 
 Valtech - Product Lead & Technology Director, New York, NY | March 2014 – August 2019
@@ -166,7 +177,7 @@ TAILORING RULES:
 6. CORE COMPETENCIES: Reorder within each subsection to front-load skills the posting calls out. Add specific tools from posting if Charles genuinely has them.
 7. 3-PAGE RULE: Budget copy length carefully. Summary must not exceed 5 lines. Tighten bullet language if needed. Never cut jobs, sections, education, or certifications.
 
-Return a single valid JSON object with this exact structure:
+Return a single valid JSON object:
 {
   "headline": "string",
   "summary": "string",
@@ -192,216 +203,235 @@ Return a single valid JSON object with this exact structure:
 
   const raw = await callClaude(apiKey, systemPrompt, userPrompt);
 
-  // Aggressively strip any markdown or surrounding text
   let clean = raw.trim();
-  clean = clean.replace(/^```json\s*/i, "").replace(/^```\s*/i, "");
-  clean = clean.replace(/\s*```$/i, "");
-
-  // Find the JSON object boundaries as a final safety net
+  clean = clean.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
   const start = clean.indexOf("{");
   const end   = clean.lastIndexOf("}");
   if (start === -1 || end === -1) {
-    throw new Error("Claude did not return a valid JSON object. Raw response: " + raw.substring(0, 200));
+    throw new Error("Claude did not return a valid JSON object. Raw: " + raw.substring(0, 200));
   }
-  clean = clean.substring(start, end + 1);
-
-  return JSON.parse(clean);
+  return JSON.parse(clean.substring(start, end + 1));
 }
+
+// ── Run builder helpers ────────────────────────────────────────────────────────
+
+// Name: 18pt, Aptos, color #156082, NOT bold
+const nameRun = (text) => new TextRun({
+  text,
+  font:  "Aptos",
+  size:  PT(18) / 10,   // docx size is in half-points: 18pt = 36
+  color: BLUE,
+  bold:  false
+});
+
+// Body text: 12pt, Aptos, black
+const bodyRun = (text, opts = {}) => new TextRun({
+  text,
+  font:    "Aptos",
+  size:    24,           // 12pt = 24 half-points
+  bold:    opts.bold   || false,
+  italics: opts.italic || false,
+  color:   opts.color  || BODY_BLACK
+});
+
+// Contact line: 11pt, Aptos, black
+const smallRun = (text) => new TextRun({
+  text,
+  font:  "Aptos",
+  size:  22,             // 11pt = 22 half-points
+  color: BODY_BLACK
+});
+
+// Hyperlink run: 11pt, #467886, underline
+const hyperlinkRun = (text, href) => new ExternalHyperlink({
+  link: href,
+  children: [new TextRun({
+    text,
+    font:      "Aptos",
+    size:      22,
+    color:     HYPERLINK,
+    underline: { type: UnderlineType.SINGLE }
+  })]
+});
+
+// Blank spacer line
+const blankLine = () => new Paragraph({
+  children: [new TextRun({ text: "", font: "Aptos", size: 24 })],
+  spacing:  { after: 0, ...LINE_115 }
+});
+
+// Section header: 12pt, Aptos, #156082, NOT bold, no border
+const sectionHeader = (text) => new Paragraph({
+  children: [new TextRun({
+    text,
+    font:  "Aptos",
+    size:  24,
+    color: BLUE,
+    bold:  false
+  })],
+  spacing: { after: 0, ...LINE_115 }
+});
+
+// Bullet paragraph
+const bulletPara = (text) => new Paragraph({
+  children: [bodyRun(text)],
+  spacing:  { after: 0, ...LINE_115 },
+  numbering: { reference: "bullets", level: 0 }
+});
+
+// Experience heading: bold, 12pt, 6pt after, company text in #404040
+const experienceHeading = (company, rest) => new Paragraph({
+  children: [
+    new TextRun({ text: company, font: "Aptos", size: 24, bold: true, color: DARK_GRAY }),
+    new TextRun({ text: rest,    font: "Aptos", size: 24, bold: true, color: DARK_GRAY })
+  ],
+  spacing: { after: PT(6), ...LINE_115 }
+});
+
+// Competency label: 12pt, #156082, NOT bold
+const competencyLabel = (text) => new Paragraph({
+  children: [new TextRun({
+    text,
+    font:  "Aptos",
+    size:  24,
+    color: BLUE,
+    bold:  false
+  })],
+  spacing: { after: 0, ...LINE_115 }
+});
 
 // ── Build the Word document ────────────────────────────────────────────────────
 async function buildDocument(content, outputPath) {
   console.log("📄 Building Word document...");
 
-  const ACCENT_BLUE = "156082";
-  const BODY_BLACK  = "000000";
-
-  const headerRun = (text) => new TextRun({
-    text, bold: true, color: ACCENT_BLUE, font: "Aptos Display", size: 24
-  });
-
-  const nameRun = (text) => new TextRun({
-    text, bold: true, color: ACCENT_BLUE, font: "Aptos Display", size: 36
-  });
-
-  const bodyRun = (text, opts = {}) => new TextRun({
-    text, font: "Aptos", size: 24,
-    bold: opts.bold || false,
-    italics: opts.italics || false,
-    color: BODY_BLACK
-  });
-
-  const smallRun = (text) => new TextRun({
-    text, font: "Aptos", size: 22, color: BODY_BLACK
-  });
-
-  const blankLine = () => new Paragraph({
-    children: [new TextRun({ text: "", font: "Aptos", size: 24 })],
-    spacing: { after: 0 }
-  });
-
-  const sectionHeader = (text) => new Paragraph({
-    children: [headerRun(text)],
-    spacing: { after: 0 },
-    border: {
-      bottom: { style: BorderStyle.SINGLE, size: 6, color: ACCENT_BLUE, space: 1 }
-    }
-  });
-
-  const bulletPara = (text) => new Paragraph({
-    children: [bodyRun(text)],
-    spacing: { after: 0 },
-    numbering: { reference: "bullets", level: 0 }
-  });
-
   const children = [];
 
-  // Name
+  // ── Name ──────────────────────────────────────────────────────────────────
   children.push(new Paragraph({
     children: [nameRun("CHARLES VICKERS")],
-    spacing: { after: 0 }
+    spacing:  { after: 0, ...LINE_115 }
   }));
 
-  // Headline
+  // ── Headline ──────────────────────────────────────────────────────────────
   children.push(new Paragraph({
     children: [bodyRun(content.headline)],
-    spacing: { after: 0 }
+    spacing:  { after: 0, ...LINE_115 }
   }));
 
-  // Contact
+  // ── Contact line ──────────────────────────────────────────────────────────
   children.push(new Paragraph({
     children: [
       smallRun("Bloomfield, NJ | 973.698.6714 | "),
-      new ExternalHyperlink({
-        link: "mailto:charlesvickers.2019@gmail.com",
-        children: [new TextRun({
-          text: "charlesvickers.2019@gmail.com",
-          font: "Aptos", size: 22,
-          style: "Hyperlink",
-          underline: { type: UnderlineType.SINGLE }
-        })]
-      }),
+      hyperlinkRun("charlesvickers.2019@gmail.com", "mailto:charlesvickers.2019@gmail.com"),
       smallRun(" | "),
-      new ExternalHyperlink({
-        link: "http://www.linkedin.com/in/vickerscharles",
-        children: [new TextRun({
-          text: "www.linkedin.com/in/vickerscharles",
-          font: "Aptos", size: 22,
-          style: "Hyperlink",
-          underline: { type: UnderlineType.SINGLE }
-        })]
-      })
+      hyperlinkRun("www.linkedin.com/in/vickerscharles", "http://www.linkedin.com/in/vickerscharles")
     ],
-    spacing: { after: 0 }
+    spacing: { after: 0, ...LINE_115 }
   }));
 
   children.push(blankLine());
 
-  // SUMMARY
+  // ── SUMMARY ───────────────────────────────────────────────────────────────
   children.push(sectionHeader("SUMMARY"));
   children.push(new Paragraph({
     children: [bodyRun(content.summary)],
-    spacing: { after: 0 }
+    spacing:  { after: 0, ...LINE_115 }
   }));
+
   children.push(blankLine());
 
-  // HIGHLIGHTS
+  // ── HIGHLIGHTS ────────────────────────────────────────────────────────────
   children.push(sectionHeader("HIGHLIGHTS"));
   content.highlights.forEach(h => children.push(bulletPara(h)));
+
   children.push(blankLine());
 
-  // KEY DELIVERIES
+  // ── KEY PRODUCT DELIVERIES & IMPACT ───────────────────────────────────────
   children.push(sectionHeader("KEY PRODUCT DELIVERIES & IMPACT"));
   content.key_deliveries.forEach(d => {
     children.push(new Paragraph({
-      children: [bodyRun(d.title + " – "), bodyRun(d.description)],
-      spacing: { after: 0 },
+      children: [
+        bodyRun(d.title + " – ", { bold: false }),
+        bodyRun(d.description)
+      ],
+      spacing:   { after: 0, ...LINE_115 },
       numbering: { reference: "bullets", level: 0 }
     }));
   });
+
   children.push(blankLine());
 
-  // PROFESSIONAL EXPERIENCE
+  // ── PROFESSIONAL EXPERIENCE ───────────────────────────────────────────────
   children.push(sectionHeader("PROFESSIONAL EXPERIENCE"));
   children.push(blankLine());
 
   // CRVTech
-  children.push(new Paragraph({
-    children: [
-      bodyRun("CRVTech LLC", { bold: true }),
-      bodyRun(" - Founder & Principal Consultant, Bloomfield, NJ | Sept 2025 – Present", { bold: true })
-    ],
-    spacing: { after: 0 }
-  }));
+  children.push(experienceHeading(
+    "CRVTech LLC",
+    " - Founder & Principal Consultant, Bloomfield, NJ | Sept 2025 – Present"
+  ));
   content.crvtech_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
   // Publicis
-  children.push(new Paragraph({
-    children: [
-      bodyRun("Publicis Groupe (Rauxa / Razorfish)", { bold: true }),
-      bodyRun(" - Product Director, New York, NY | Sept 2019 – Sept 2025", { bold: true })
-    ],
-    spacing: { after: 0 }
-  }));
+  children.push(experienceHeading(
+    "Publicis Groupe (Rauxa / Razorfish)",
+    " - Product Director, New York, NY | Sept 2019 – Sept 2025"
+  ));
   content.publicis_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
   // Valtech
-  children.push(new Paragraph({
-    children: [
-      bodyRun("Valtech", { bold: true }),
-      bodyRun(" - Product Lead & Technology Director, New York, NY | March 2014 – August 2019", { bold: true })
-    ],
-    spacing: { after: 0 }
-  }));
+  children.push(experienceHeading(
+    "Valtech",
+    " - Product Lead & Technology Director, New York, NY | March 2014 – August 2019"
+  ));
   content.valtech_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
-  // EDUCATION
+  // ── EDUCATION ─────────────────────────────────────────────────────────────
   children.push(sectionHeader("EDUCATION"));
   children.push(bulletPara("Bachelor's Coursework in Computer Science – Bloomfield College, NJ | 2001"));
   children.push(bulletPara("Certified Cisco Networking Associate Program"));
   children.push(blankLine());
 
-  // CERTIFICATIONS
+  // ── CERTIFICATIONS ────────────────────────────────────────────────────────
   children.push(sectionHeader("CERTIFICATIONS"));
   children.push(bulletPara("Accessibility Fundamentals Certificate – International Association of Accessibility Professionals (IAAP) | Expected 2026"));
   children.push(blankLine());
 
-  // CORE COMPETENCIES
+  // ── CORE COMPETENCIES & SKILLS ────────────────────────────────────────────
   children.push(sectionHeader("CORE COMPETENCIES & SKILLS"));
   children.push(blankLine());
 
   const competencyBlock = (label, text) => [
-    new Paragraph({
-      children: [bodyRun(label + ":", { bold: true })],
-      spacing: { after: 0 }
-    }),
+    competencyLabel(label + ":"),
     new Paragraph({
       children: [bodyRun(text)],
-      spacing: { after: 0 }
+      spacing:  { after: 0, ...LINE_115 }
     }),
     blankLine()
   ];
 
-  competencyBlock("Product Strategy & Discovery", content.competencies.strategy).forEach(p => children.push(p));
-  competencyBlock("Execution & Product Operations", content.competencies.execution).forEach(p => children.push(p));
-  competencyBlock("Tools & Technology", content.competencies.tools).forEach(p => children.push(p));
+  competencyBlock("Product Strategy & Discovery",            content.competencies.strategy).forEach(p => children.push(p));
+  competencyBlock("Execution & Product Operations",          content.competencies.execution).forEach(p => children.push(p));
+  competencyBlock("Tools & Technology",                      content.competencies.tools).forEach(p => children.push(p));
   competencyBlock("Accessibility, Quality & AI (Superpowers)", content.competencies.accessibility).forEach(p => children.push(p));
 
-  // Assemble
+  // ── Assemble document ──────────────────────────────────────────────────────
   const doc = new Document({
     numbering: {
       config: [{
         reference: "bullets",
         levels: [{
-          level: 0,
-          format: LevelFormat.BULLET,
-          text: "\u2022",
+          level:     0,
+          format:    LevelFormat.BULLET,
+          text:      "\u2022",
           alignment: AlignmentType.LEFT,
           style: {
             paragraph: {
-              indent: { left: 720, hanging: 360 }
+              indent:  { left: 720, hanging: 360 },
+              spacing: { after: 0, ...LINE_115 }
             }
           }
         }]
@@ -417,8 +447,8 @@ async function buildDocument(content, outputPath) {
     sections: [{
       properties: {
         page: {
-          size: { width: 12240, height: 15840 },
-          margin: { top: 720, right: 1080, bottom: 720, left: 1080 }
+          size:   { width: IN(8.5), height: IN(11) },  // US Letter
+          margin: { top: IN(0.5), right: IN(0.5), bottom: IN(0.5), left: IN(0.5) }  // 0.5in all sides
         }
       },
       children

@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.6.0 - Token usage tracking: pre-run estimate, post-run actual,
+v0.7.0 - Formatting overhaul on resume tailor + filename convention fix
          daily total, monthly pace warning, usage.log
 """
 
@@ -473,13 +473,14 @@ def log_skip(url: str, score: int, reason: str):
         f.write(f"[{timestamp}] SCORE {score}/10 | {reason} | {url}\n")
 
 # ── Tailor resume ──────────────────────────────────────────────────────────────
-def tailor_resume(posting_text: str, job_title: str, score: int, is_mr: bool = False):
+def tailor_resume(posting_text: str, job_title: str, company: str, score: int, is_mr: bool = False):
     print("📝 Tailoring resume to match posting...")
     RESUMES.mkdir(parents=True, exist_ok=True)
-    timestamp   = datetime.now().strftime("%Y%m%d_%H%M")
-    safe_title  = re.sub(r"[^a-zA-Z0-9_]", "_", job_title[:40])
+    date_str    = datetime.now().strftime("%Y-%m-%d")
+    safe_title  = re.sub(r"[^a-zA-Z0-9]", "_", job_title[:30]).strip("_")
+    safe_co     = re.sub(r"[^a-zA-Z0-9]", "_", company[:20]).strip("_")
     mr_flag     = "_MR" if is_mr else ""
-    output_file = f"{timestamp}_{safe_title}_score{score}{mr_flag}.docx"
+    output_file = f"{safe_title}_{safe_co}_{date_str}{mr_flag}.docx"
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as tmp:
         tmp.write(posting_text)
@@ -497,18 +498,29 @@ def tailor_resume(posting_text: str, job_title: str, score: int, is_mr: bool = F
     finally:
         os.unlink(tmp_path)
 
-# ── Extract job title ──────────────────────────────────────────────────────────
-def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[str, int, int]:
-    """Returns (title, input_tokens, output_tokens)"""
+# ── Extract job title and company ─────────────────────────────────────────────
+def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[str, str, int, int]:
+    """Returns (title, company, input_tokens, output_tokens)"""
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=50,
+        max_tokens=80,
         messages=[{
             "role": "user",
-            "content": f"Extract only the job title from this posting. Return the title only:\n\n{posting_text[:1000]}"
+            "content": (
+                f"Extract the job title and company name from this posting. "
+                f"Return ONLY two lines:\nTitle: <title>\nCompany: <company>\n\n{posting_text[:1000]}"
+            )
         }]
     )
-    return message.content[0].text.strip(), message.usage.input_tokens, message.usage.output_tokens
+    raw = message.content[0].text.strip()
+    title   = "Role"
+    company = "Company"
+    for line in raw.splitlines():
+        if line.lower().startswith("title:"):
+            title   = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("company:"):
+            company = line.split(":", 1)[1].strip()
+    return title, company, message.usage.input_tokens, message.usage.output_tokens
 
 # ── Process qualifying posting ─────────────────────────────────────────────────
 def process_qualifying_posting(client, posting_text, profile, score_data, url, is_mr=False) -> tuple[int, int]:
@@ -532,18 +544,18 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
     print(f"\n{'='*60}")
     print(f"✅ Proposal saved to: {saved}  [{label}]")
 
-    job_title, t_in, t_out = extract_job_title(client, posting_text)
+    job_title, company, t_in, t_out = extract_job_title(client, posting_text)
     total_in  += t_in
     total_out += t_out
 
-    tailor_resume(posting_text, job_title, score, is_mr)
+    tailor_resume(posting_text, job_title, company, score, is_mr)
 
     return total_in, total_out
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.6.0")
+    print("  CRVTech Job Search Agent  v0.7.0")
     print("="*60)
 
     api_key = load_api_key()
