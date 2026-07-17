@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.5.2 - Patch: LinkedIn fetch fallback to manual paste when blocked
+v0.5.3 - Patch: Detect JS-heavy LinkedIn responses and trigger paste fallback
 """
 
 import os
@@ -49,19 +49,28 @@ def fetch_posting(url: str) -> str:
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
         response = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
 
-        # Detect login wall or block
+        # Detect hard blocks
         if response.status_code in (403, 401, 429):
             return ""
 
         text = re.sub(r"<[^>]+>", " ", response.text)
         text = re.sub(r"\s+", " ", text).strip()
 
-        # Detect LinkedIn login wall in body
+        # Detect login wall signals
         login_signals = [
             "join now to see", "sign in", "authwall",
             "join linkedin", "please log in", "create an account"
         ]
         if any(signal in text.lower()[:500] for signal in login_signals):
+            return ""
+
+        # Detect JavaScript-heavy response (page didn't render properly)
+        js_signals = [
+            "function ", "window.", "const ", "let ", "var ",
+            "getDfd()", "Promise(", "=>{"
+        ]
+        js_count = sum(1 for signal in js_signals if signal in text[:500])
+        if js_count >= 2:
             return ""
 
         return text[:6000]
@@ -404,7 +413,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.5.2")
+    print("  CRVTech Job Search Agent  v0.5.3")
     print("="*60)
 
     api_key = load_api_key()
