@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.8.0 - 3-page enforcement, summary length, drop shadow, role name extraction fix
+v0.9.0 - Proposal optional (default no), human voice rewrite
          daily total, monthly pace warning, usage.log
 """
 
@@ -412,9 +412,9 @@ def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str,
     print("✍️  Writing tailored proposal...")
 
     tone_instructions = {
-        "direct_confident":             "Direct and confident. Short declarative sentences. Lead with results. No hedging.",
-        "formal_polished":              "Formal and polished. Structured paragraphs. Professional vocabulary. Authoritative.",
-        "conversational_authoritative": "Conversational but authoritative. Warm opener. Slightly shorter paragraphs. Still results-driven."
+        "direct_confident":             "Direct and confident. Mix short punchy sentences with longer ones. Lead with results.",
+        "formal_polished":              "Formal but still human. Structured paragraphs. Never stiff or robotic. Authoritative.",
+        "conversational_authoritative": "Conversational and warm. Write the way a confident person actually talks. Still results-driven."
     }
 
     tone       = score_data.get("tone", "direct_confident")
@@ -423,25 +423,72 @@ def write_proposal(client: anthropic.Anthropic, posting_text: str, profile: str,
 
     prompt = f"""
 You are writing a job application proposal on behalf of Charles Vickers of CRVTech LLC.
+Your job is to write something that sounds like a real, confident human being wrote it —
+not like a cover letter template, not like an AI, not like corporate marketing copy.
 
-Here is Charles's full profile including voice rules, proof points, and proposal structure guidelines:
+CHARLES'S PROFILE:
 {profile}
 
-Here is the job posting:
+JOB POSTING:
 {posting_text}
 
-Tone instruction: {tone_instr}
-Lead with this focus: {key_focus}
+TONE: {tone_instr}
+LEAD WITH: {key_focus}
 
-Rules:
+══════════════════════════════════════════
+VOICE RULES — READ CAREFULLY
+══════════════════════════════════════════
+
+WHAT MAKES IT SOUND HUMAN:
+- Vary sentence length intentionally. Short sentences hit hard. Longer ones carry the detail.
+- Use contractions naturally where they fit (don't, it's, that's, you're).
+- Occasionally start a sentence mid-thought — the way a person would in conversation.
+- Let confidence come through in what you don't say as much as what you do.
+- Reference specific proof points (numbers, client names, outcomes) without over-explaining them.
+- Write the closing like someone who knows they're the right person — not like someone hoping.
+
+WHAT TO NEVER DO:
+- Never use: "I am passionate about", "I am excited to", "I would love to", "leverage",
+  "synergies", "track record of success", "detail-oriented", "team player",
+  "results-driven", "I am confident that", "I believe I would be", "please find",
+  "I look forward to hearing from you", "thank you for your consideration"
+- Never start with "I" — open with a result, a client name, or a direct statement
+- Never write three sentences in a row with the same structure
+- Never use the passive voice
+- Never pad — every sentence must earn its place
+- Never sound like you're filling out a form
+
+STRUCTURAL RULES:
 - Maximum 4,500 characters
-- Never start with "I" — open with a result, client name, or bold claim
-- Use specific proof points (numbers, client names, outcomes)
-- No generic openers, no passive voice, no AI-sounding phrases
-- End with forward momentum, not "I look forward to hearing from you"
-- Write the proposal only — no preamble, no labels
+- End with forward momentum — write like someone who expects the call, not hopes for it
+- Write the proposal only — no subject line, no label, no preamble
 
-Write the proposal now:
+══════════════════════════════════════════
+EXAMPLE OF THE RIGHT VOICE (study this):
+══════════════════════════════════════════
+
+EXAMPLE OPENER (direct_confident):
+"Four consecutive years. Zero production incidents. Fifty million users on the platform
+the whole time. That doesn't happen by accident — it happens when the product leader
+running the show treats quality as a feature, not an afterthought.
+
+That's the standard I bring to every engagement."
+
+EXAMPLE OPENER (conversational_authoritative):
+"Brigit's mission resonates with me because I've spent the last decade building
+products for people who can't afford for them to fail. The Verizon platform I ran
+served 50M+ customers. Four years, zero incidents. The work has to be that tight
+when the stakes are that real."
+
+EXAMPLE CLOSING (all tones):
+"When you're ready to talk through what this could look like, I'm ready for that
+conversation."
+
+══════════════════════════════════════════
+Now write the full proposal. Match the posting's energy. Use Charles's proof points
+specifically. Make it read like a real person wrote it at 11pm because they actually
+want this role — not like something generated from a template.
+══════════════════════════════════════════
 """
 
     message = client.messages.create(
@@ -533,6 +580,13 @@ def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[s
                 company = val
     return title, company, message.usage.input_tokens, message.usage.output_tokens
 
+# ── Prompt for proposal generation ────────────────────────────────────────────
+def prompt_for_proposal() -> bool:
+    """Ask whether to generate a proposal. Defaults to No."""
+    print("\nGenerate proposal? (yes / no — default is no):")
+    choice = input("> ").strip().lower()
+    return choice in ("yes", "y")
+
 # ── Process qualifying posting ─────────────────────────────────────────────────
 def process_qualifying_posting(client, posting_text, profile, score_data, url, is_mr=False) -> tuple[int, int]:
     """Returns (total_input_tokens, total_output_tokens) for this processing run."""
@@ -541,20 +595,25 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
     total_in  = 0
     total_out = 0
 
-    proposal, p_in, p_out = write_proposal(client, posting_text, profile, score_data)
-    total_in  += p_in
-    total_out += p_out
+    # ── Proposal (optional, defaults to No) ───────────────────────────────────
+    if prompt_for_proposal():
+        proposal, p_in, p_out = write_proposal(client, posting_text, profile, score_data)
+        total_in  += p_in
+        total_out += p_out
 
-    saved = save_proposal(proposal, url, score, is_mr)
-    label = f"{score}/10 (Manual Review)" if is_mr else f"{score}/10"
+        saved = save_proposal(proposal, url, score, is_mr)
+        label = f"{score}/10 (Manual Review)" if is_mr else f"{score}/10"
 
-    print(f"\n{'='*60}")
-    print("PROPOSAL")
-    print(f"{'='*60}\n")
-    print(proposal)
-    print(f"\n{'='*60}")
-    print(f"✅ Proposal saved to: {saved}  [{label}]")
+        print(f"\n{'='*60}")
+        print("PROPOSAL")
+        print(f"{'='*60}\n")
+        print(proposal)
+        print(f"\n{'='*60}")
+        print(f"✅ Proposal saved to: {saved}  [{label}]")
+    else:
+        print("\n⏭️  Proposal skipped.")
 
+    # ── Resume (always generated) ─────────────────────────────────────────────
     job_title, company, t_in, t_out = extract_job_title(client, posting_text)
     total_in  += t_in
     total_out += t_out
@@ -566,7 +625,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.8.0")
+    print("  CRVTech Job Search Agent  v0.9.0")
     print("="*60)
 
     api_key = load_api_key()
