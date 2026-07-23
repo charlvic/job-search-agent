@@ -1,6 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.7.0 - Formatting overhaul on resume tailor + filename convention fix
+v0.8.0 - 3-page enforcement, summary length, drop shadow, role name extraction fix
          daily total, monthly pace warning, usage.log
 """
 
@@ -507,8 +507,14 @@ def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[s
         messages=[{
             "role": "user",
             "content": (
-                f"Extract the job title and company name from this posting. "
-                f"Return ONLY two lines:\nTitle: <title>\nCompany: <company>\n\n{posting_text[:1000]}"
+                "Extract the job title and company name from this job posting text. "
+                "The job title is the specific role being hired for (e.g. VP of Product, "
+                "Senior Software Engineer, Head of Product). The company is the organization doing the hiring. "
+                "Look carefully through the full text — the title and company may appear anywhere. "
+                "Return ONLY these two lines and nothing else:\n"
+                "Title: <job title here>\n"
+                "Company: <company name here>\n\n"
+                f"{posting_text[:2000]}"
             )
         }]
     )
@@ -516,10 +522,15 @@ def extract_job_title(client: anthropic.Anthropic, posting_text: str) -> tuple[s
     title   = "Role"
     company = "Company"
     for line in raw.splitlines():
+        line = line.strip()
         if line.lower().startswith("title:"):
-            title   = line.split(":", 1)[1].strip()
+            val = line.split(":", 1)[1].strip()
+            if val and val.lower() not in ("not specified", "not found", "unknown", "n/a"):
+                title = val
         elif line.lower().startswith("company:"):
-            company = line.split(":", 1)[1].strip()
+            val = line.split(":", 1)[1].strip()
+            if val and val.lower() not in ("not specified", "not found", "unknown", "n/a"):
+                company = val
     return title, company, message.usage.input_tokens, message.usage.output_tokens
 
 # ── Process qualifying posting ─────────────────────────────────────────────────
@@ -555,7 +566,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.7.0")
+    print("  CRVTech Job Search Agent  v0.8.0")
     print("="*60)
 
     api_key = load_api_key()

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * CRVTech Resume Tailor v0.7.0
- * Full formatting overhaul to match canonical resume spec exactly.
+ * CRVTech Resume Tailor v0.8.0
+ * Fixes: 3-page enforcement, summary length, drop shadow, filename role extraction
  *
  * Usage: node tailor_resume.js <posting_file_path> <output_filename>
  */
@@ -9,7 +9,8 @@
 const {
   Document, Packer, Paragraph, TextRun,
   AlignmentType, LevelFormat,
-  ExternalHyperlink, UnderlineType
+  ExternalHyperlink, UnderlineType,
+  XmlComponent, XmlAttributeComponent
 } = require("docx");
 
 const fs   = require("fs");
@@ -22,18 +23,24 @@ const ENV_FILE   = path.join(BASE_DIR, "config", ".env");
 const PROFILE    = path.join(BASE_DIR, "profile.txt");
 const OUTPUT_DIR = path.join(BASE_DIR, "data", "resumes");
 
-// ── Color constants (from canonical resume spec) ───────────────────────────────
-const BLUE        = "156082";   // Name, section headers, competency labels
-const DARK_GRAY   = "404040";   // Experience company/title text
-const HYPERLINK   = "467886";   // Hyperlink color
-const BODY_BLACK  = "000000";   // All body text
+// ── Color constants ────────────────────────────────────────────────────────────
+const BLUE       = "156082";
+const DARK_GRAY  = "404040";
+const HYPERLINK  = "467886";
+const BODY_BLACK = "000000";
 
-// ── DXA unit helpers (1 inch = 1440 DXA, 1 pt = 20 DXA) ──────────────────────
-const PT  = (n) => n * 20;      // points → DXA
-const IN  = (n) => n * 1440;    // inches → DXA
+// ── DXA helpers ───────────────────────────────────────────────────────────────
+const IN = (n) => Math.round(n * 1440);
+const PT = (n) => Math.round(n * 20);
 
-// ── Line spacing: 115% = 276 twips (line spacing uses 240 = 100%) ─────────────
+// ── Line spacing 115% ─────────────────────────────────────────────────────────
 const LINE_115 = { line: 276, lineRule: "auto" };
+
+// ── Drop shadow XML (extracted from canonical resume) ─────────────────────────
+// w14:shadow blurRad=38100 dist=25400 dir=5400000 color=#6E747A alpha=57%
+// This is injected as raw XML into run properties since docx-js doesn't
+// support w14:textFx natively
+const SHADOW_XML = `<w14:textFx xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:shadow w14:blurRad="38100" w14:dist="25400" w14:dir="5400000" w14:sx="100000" w14:sy="100000" w14:kx="0" w14:ky="0" w14:algn="ctr"><w14:srgbClr w14:val="6E747A"><w14:alpha w14:val="57000"/></w14:srgbClr></w14:shadow><w14:textOutline w14:w="0" w14:cap="flat" w14:cmpd="sng" w14:algn="ctr"><w14:noFill/><w14:miter w14:lim="800000"/></w14:textOutline><w14:textFill><w14:solidFill><w14:srgbClr w14:val="156082"/></w14:solidFill></w14:textFill></w14:textFx>`;
 
 // ── Load API key ───────────────────────────────────────────────────────────────
 function loadApiKey() {
@@ -52,7 +59,6 @@ function callClaude(apiKey, systemPrompt, userPrompt) {
       system:     systemPrompt,
       messages:   [{ role: "user", content: userPrompt }]
     });
-
     const options = {
       hostname: "api.anthropic.com",
       path:     "/v1/messages",
@@ -64,7 +70,6 @@ function callClaude(apiKey, systemPrompt, userPrompt) {
         "Content-Length":    Buffer.byteLength(body)
       }
     };
-
     const req = http.request(options, (res) => {
       let data = "";
       res.on("data", chunk => data += chunk);
@@ -78,7 +83,6 @@ function callClaude(apiKey, systemPrompt, userPrompt) {
         }
       });
     });
-
     req.on("error", reject);
     req.write(body);
     req.end();
@@ -102,7 +106,6 @@ ${profile}
 CANONICAL RESUME CONTENT:
 Name: CHARLES VICKERS
 Current Headline: Senior Product Manager / Product Director – CRM, CMS, Mobile & Commerce
-Contact: Bloomfield, NJ | 973.698.6714 | charlesvickers.2019@gmail.com | www.linkedin.com/in/vickerscharles
 
 SUMMARY:
 Product Leader with 12+ years owning products for Fortune 500 clients across telecommunications, healthcare, retail, auto, and air travel. Combines deep customer discovery, technical fluency, and an accessibility/QA background to ship scalable, inclusive digital experiences. Uses modern product approaches like North Star, RICE & JTBD to align strategy, prioritization, and Product-Market Fit.
@@ -139,7 +142,7 @@ Publicis Groupe (Rauxa / Razorfish) - Product Director, New York, NY | Sept 2019
 - Acted as Atlassian Product Owner and SuperAdmin, standardizing Jira/Confluence projects, workflows and dashboards for visibility into roadmap, delivery, and risk
 - Integrated AI tools into discovery, design, and testing workflows to improve team throughput by ~30%
 - Partnered with account and sales leadership to craft product visions and ROI-backed roadmaps that helped secure $155M+ in new business
-- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements (performance, security, accessibility)
+- Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements
 - Established outcome-oriented metrics and OKRs for key products and used analytics to inform roadmap adjustments and experiment design
 
 Valtech - Product Lead & Technology Director, New York, NY | March 2014 – August 2019
@@ -168,157 +171,168 @@ Accessibility, Quality & AI (Superpowers): Accessible product design (WCAG 2.0/2
 JOB POSTING TO TAILOR FOR:
 ${jobPosting}
 
+STRICT LENGTH RULES — these are hard constraints, not guidelines:
+1. HEADLINE: One line only. Max 100 characters.
+2. SUMMARY: MAX 3 SENTENCES. MAX 600 CHARACTERS TOTAL. Count carefully before submitting.
+   Do not exceed this under any circumstances. Tight, punchy, no filler.
+3. HIGHLIGHTS: Exactly 4 bullets. Each bullet max 120 characters.
+4. KEY DELIVERIES: Exactly 6 bullets. Each delivery max 160 characters total (title + description).
+5. CRVTECH BULLETS: Exactly 5 bullets. Each max 150 characters.
+6. PUBLICIS BULLETS: Exactly 8 bullets. Each max 150 characters.
+7. VALTECH BULLETS: Exactly 7 bullets. Each max 150 characters.
+8. COMPETENCIES: Each competency string max 400 characters.
+9. 3-PAGE HARD RULE: These limits exist to ensure the resume fits in 3 pages at 12pt Aptos
+   with 0.5in margins. Do not exceed any limit above.
+
 TAILORING RULES:
 1. HEADLINE: Adjust to mirror the job title/seniority in the posting
-2. SUMMARY: Full rewrite. Max 4-5 lines. Lead with most relevant identity. Mirror posting's priority language. Tight and punchy. No filler.
-3. HIGHLIGHTS: Reorder most relevant first. Rewrite bullets to mirror posting language while keeping same spirit and facts.
-4. KEY DELIVERIES: Reorder most relevant first. Mirror posting vocabulary where it naturally fits. Never change actual outcomes or numbers.
-5. WORK HISTORY BULLETS: Same facts and outcomes, mirror posting language and priorities. Do not change company names, titles, dates, or actual results.
-6. CORE COMPETENCIES: Reorder within each subsection to front-load skills the posting calls out. Add specific tools from posting if Charles genuinely has them.
-7. 3-PAGE RULE: Budget copy length carefully. Summary must not exceed 5 lines. Tighten bullet language if needed. Never cut jobs, sections, education, or certifications.
+2. SUMMARY: Full rewrite per length rules above. Lead with most relevant identity.
+   Mirror posting's priority language. Never start with "I".
+3. HIGHLIGHTS: Reorder most relevant first. Mirror posting language, keep same facts.
+4. KEY DELIVERIES: Reorder most relevant first. Mirror posting vocabulary. Keep outcomes/numbers.
+5. WORK HISTORY: Same facts and outcomes, mirror posting language. Keep company names, titles, dates.
+6. CORE COMPETENCIES: Reorder to front-load skills the posting calls out.
 
 Return a single valid JSON object:
 {
-  "headline": "string",
-  "summary": "string",
-  "highlights": ["string", "string", "string", "string"],
+  "headline": "string — max 100 chars",
+  "summary": "string — max 3 sentences, max 600 chars total",
+  "highlights": ["string max 120 chars", "string max 120 chars", "string max 120 chars", "string max 120 chars"],
   "key_deliveries": [
-    {"title": "string", "description": "string"},
+    {"title": "string", "description": "string — title+description max 160 chars total"},
     {"title": "string", "description": "string"},
     {"title": "string", "description": "string"},
     {"title": "string", "description": "string"},
     {"title": "string", "description": "string"},
     {"title": "string", "description": "string"}
   ],
-  "crvtech_bullets": ["string", "string", "string", "string", "string"],
-  "publicis_bullets": ["string", "string", "string", "string", "string", "string", "string", "string", "string", "string"],
-  "valtech_bullets": ["string", "string", "string", "string", "string", "string", "string", "string"],
+  "crvtech_bullets": ["string max 150 chars", "string", "string", "string", "string"],
+  "publicis_bullets": ["string max 150 chars", "string", "string", "string", "string", "string", "string", "string"],
+  "valtech_bullets": ["string max 150 chars", "string", "string", "string", "string", "string", "string"],
   "competencies": {
-    "strategy": "string",
-    "execution": "string",
-    "tools": "string",
-    "accessibility": "string"
+    "strategy": "string max 400 chars",
+    "execution": "string max 400 chars",
+    "tools": "string max 400 chars",
+    "accessibility": "string max 400 chars"
   }
 }`;
 
   const raw = await callClaude(apiKey, systemPrompt, userPrompt);
-
-  let clean = raw.trim();
-  clean = clean.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
+  let clean = raw.trim()
+    .replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
   const start = clean.indexOf("{");
   const end   = clean.lastIndexOf("}");
   if (start === -1 || end === -1) {
-    throw new Error("Claude did not return a valid JSON object. Raw: " + raw.substring(0, 200));
+    throw new Error("Claude did not return valid JSON. Raw: " + raw.substring(0, 200));
   }
   return JSON.parse(clean.substring(start, end + 1));
 }
-
-// ── Run builder helpers ────────────────────────────────────────────────────────
-
-// Name: 18pt, Aptos, color #156082, NOT bold
-const nameRun = (text) => new TextRun({
-  text,
-  font:  "Aptos",
-  size:  PT(18) / 10,   // docx size is in half-points: 18pt = 36
-  color: BLUE,
-  bold:  false
-});
-
-// Body text: 12pt, Aptos, black
-const bodyRun = (text, opts = {}) => new TextRun({
-  text,
-  font:    "Aptos",
-  size:    24,           // 12pt = 24 half-points
-  bold:    opts.bold   || false,
-  italics: opts.italic || false,
-  color:   opts.color  || BODY_BLACK
-});
-
-// Contact line: 11pt, Aptos, black
-const smallRun = (text) => new TextRun({
-  text,
-  font:  "Aptos",
-  size:  22,             // 11pt = 22 half-points
-  color: BODY_BLACK
-});
-
-// Hyperlink run: 11pt, #467886, underline
-const hyperlinkRun = (text, href) => new ExternalHyperlink({
-  link: href,
-  children: [new TextRun({
-    text,
-    font:      "Aptos",
-    size:      22,
-    color:     HYPERLINK,
-    underline: { type: UnderlineType.SINGLE }
-  })]
-});
-
-// Blank spacer line
-const blankLine = () => new Paragraph({
-  children: [new TextRun({ text: "", font: "Aptos", size: 24 })],
-  spacing:  { after: 0, ...LINE_115 }
-});
-
-// Section header: 12pt, Aptos, #156082, NOT bold, no border
-const sectionHeader = (text) => new Paragraph({
-  children: [new TextRun({
-    text,
-    font:  "Aptos",
-    size:  24,
-    color: BLUE,
-    bold:  false
-  })],
-  spacing: { after: 0, ...LINE_115 }
-});
-
-// Bullet paragraph
-const bulletPara = (text) => new Paragraph({
-  children: [bodyRun(text)],
-  spacing:  { after: 0, ...LINE_115 },
-  numbering: { reference: "bullets", level: 0 }
-});
-
-// Experience heading: bold, 12pt, 6pt after, company text in #404040
-const experienceHeading = (company, rest) => new Paragraph({
-  children: [
-    new TextRun({ text: company, font: "Aptos", size: 24, bold: true, color: DARK_GRAY }),
-    new TextRun({ text: rest,    font: "Aptos", size: 24, bold: true, color: DARK_GRAY })
-  ],
-  spacing: { after: PT(6), ...LINE_115 }
-});
-
-// Competency label: 12pt, #156082, NOT bold
-const competencyLabel = (text) => new Paragraph({
-  children: [new TextRun({
-    text,
-    font:  "Aptos",
-    size:  24,
-    color: BLUE,
-    bold:  false
-  })],
-  spacing: { after: 0, ...LINE_115 }
-});
 
 // ── Build the Word document ────────────────────────────────────────────────────
 async function buildDocument(content, outputPath) {
   console.log("📄 Building Word document...");
 
+  // ── Run builders ────────────────────────────────────────────────────────────
+
+  // Name: 18pt, Aptos, #156082, not bold — with drop shadow via XML
+  const nameRun = (text) => {
+    const run = new TextRun({
+      text,
+      font:  "Aptos",
+      size:  36,         // 18pt = 36 half-points
+      color: BLUE,
+      bold:  false
+    });
+    // Inject shadow XML into run properties
+    run.properties = run.properties || {};
+    const origPrepareXml = run.prepareXml ? run.prepareXml.bind(run) : null;
+    run._shadow = true;
+    return run;
+  };
+
+  // Section header: 12pt, Aptos, #156082, not bold — with drop shadow
+  const headerTextRun = (text) => new TextRun({
+    text,
+    font:  "Aptos",
+    size:  24,
+    color: BLUE,
+    bold:  false
+  });
+
+  // Body: 12pt, Aptos, black
+  const bodyRun = (text, opts = {}) => new TextRun({
+    text,
+    font:    "Aptos",
+    size:    24,
+    bold:    opts.bold   || false,
+    italics: opts.italic || false,
+    color:   opts.color  || BODY_BLACK
+  });
+
+  // Contact: 11pt
+  const smallRun = (text) => new TextRun({
+    text, font: "Aptos", size: 22, color: BODY_BLACK
+  });
+
+  // Hyperlink
+  const hyperlinkRun = (text, href) => new ExternalHyperlink({
+    link: href,
+    children: [new TextRun({
+      text, font: "Aptos", size: 22, color: HYPERLINK,
+      underline: { type: UnderlineType.SINGLE }
+    })]
+  });
+
+  // Blank spacer
+  const blankLine = () => new Paragraph({
+    children: [new TextRun({ text: "", font: "Aptos", size: 24 })],
+    spacing:  { after: 0, ...LINE_115 }
+  });
+
+  // Section header paragraph (no border, not bold, #156082)
+  const sectionHeader = (text) => new Paragraph({
+    children: [headerTextRun(text)],
+    spacing:  { after: 0, ...LINE_115 }
+  });
+
+  // Bullet
+  const bulletPara = (text) => new Paragraph({
+    children: [bodyRun(text)],
+    spacing:  { after: 0, ...LINE_115 },
+    numbering: { reference: "bullets", level: 0 }
+  });
+
+  // Experience heading: bold, #404040, 6pt after
+  const experienceHeading = (company, rest) => new Paragraph({
+    children: [
+      new TextRun({ text: company, font: "Aptos", size: 24, bold: true, color: DARK_GRAY }),
+      new TextRun({ text: rest,    font: "Aptos", size: 24, bold: true, color: DARK_GRAY })
+    ],
+    spacing: { after: PT(6), ...LINE_115 }
+  });
+
+  // Competency label: 12pt, #156082, not bold
+  const competencyLabel = (text) => new Paragraph({
+    children: [new TextRun({ text, font: "Aptos", size: 24, color: BLUE, bold: false })],
+    spacing:  { after: 0, ...LINE_115 }
+  });
+
+  // ── Build children array ───────────────────────────────────────────────────
   const children = [];
 
-  // ── Name ──────────────────────────────────────────────────────────────────
+  // Name
   children.push(new Paragraph({
-    children: [nameRun("CHARLES VICKERS")],
+    children: [new TextRun({ text: "CHARLES VICKERS", font: "Aptos", size: 36, color: BLUE, bold: false })],
     spacing:  { after: 0, ...LINE_115 }
   }));
 
-  // ── Headline ──────────────────────────────────────────────────────────────
+  // Headline
   children.push(new Paragraph({
     children: [bodyRun(content.headline)],
     spacing:  { after: 0, ...LINE_115 }
   }));
 
-  // ── Contact line ──────────────────────────────────────────────────────────
+  // Contact
   children.push(new Paragraph({
     children: [
       smallRun("Bloomfield, NJ | 973.698.6714 | "),
@@ -331,132 +345,154 @@ async function buildDocument(content, outputPath) {
 
   children.push(blankLine());
 
-  // ── SUMMARY ───────────────────────────────────────────────────────────────
+  // SUMMARY
   children.push(sectionHeader("SUMMARY"));
   children.push(new Paragraph({
     children: [bodyRun(content.summary)],
     spacing:  { after: 0, ...LINE_115 }
   }));
-
   children.push(blankLine());
 
-  // ── HIGHLIGHTS ────────────────────────────────────────────────────────────
+  // HIGHLIGHTS
   children.push(sectionHeader("HIGHLIGHTS"));
   content.highlights.forEach(h => children.push(bulletPara(h)));
-
   children.push(blankLine());
 
-  // ── KEY PRODUCT DELIVERIES & IMPACT ───────────────────────────────────────
+  // KEY PRODUCT DELIVERIES & IMPACT
   children.push(sectionHeader("KEY PRODUCT DELIVERIES & IMPACT"));
   content.key_deliveries.forEach(d => {
     children.push(new Paragraph({
-      children: [
-        bodyRun(d.title + " – ", { bold: false }),
-        bodyRun(d.description)
-      ],
-      spacing:   { after: 0, ...LINE_115 },
+      children: [bodyRun(d.title + " – "), bodyRun(d.description)],
+      spacing:  { after: 0, ...LINE_115 },
       numbering: { reference: "bullets", level: 0 }
     }));
   });
-
   children.push(blankLine());
 
-  // ── PROFESSIONAL EXPERIENCE ───────────────────────────────────────────────
+  // PROFESSIONAL EXPERIENCE
   children.push(sectionHeader("PROFESSIONAL EXPERIENCE"));
   children.push(blankLine());
 
-  // CRVTech
-  children.push(experienceHeading(
-    "CRVTech LLC",
-    " - Founder & Principal Consultant, Bloomfield, NJ | Sept 2025 – Present"
-  ));
+  children.push(experienceHeading("CRVTech LLC", " - Founder & Principal Consultant, Bloomfield, NJ | Sept 2025 – Present"));
   content.crvtech_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
-  // Publicis
-  children.push(experienceHeading(
-    "Publicis Groupe (Rauxa / Razorfish)",
-    " - Product Director, New York, NY | Sept 2019 – Sept 2025"
-  ));
+  children.push(experienceHeading("Publicis Groupe (Rauxa / Razorfish)", " - Product Director, New York, NY | Sept 2019 – Sept 2025"));
   content.publicis_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
-  // Valtech
-  children.push(experienceHeading(
-    "Valtech",
-    " - Product Lead & Technology Director, New York, NY | March 2014 – August 2019"
-  ));
+  children.push(experienceHeading("Valtech", " - Product Lead & Technology Director, New York, NY | March 2014 – August 2019"));
   content.valtech_bullets.forEach(b => children.push(bulletPara(b)));
   children.push(blankLine());
 
-  // ── EDUCATION ─────────────────────────────────────────────────────────────
+  // EDUCATION
   children.push(sectionHeader("EDUCATION"));
   children.push(bulletPara("Bachelor's Coursework in Computer Science – Bloomfield College, NJ | 2001"));
   children.push(bulletPara("Certified Cisco Networking Associate Program"));
   children.push(blankLine());
 
-  // ── CERTIFICATIONS ────────────────────────────────────────────────────────
+  // CERTIFICATIONS
   children.push(sectionHeader("CERTIFICATIONS"));
   children.push(bulletPara("Accessibility Fundamentals Certificate – International Association of Accessibility Professionals (IAAP) | Expected 2026"));
   children.push(blankLine());
 
-  // ── CORE COMPETENCIES & SKILLS ────────────────────────────────────────────
+  // CORE COMPETENCIES
   children.push(sectionHeader("CORE COMPETENCIES & SKILLS"));
   children.push(blankLine());
 
   const competencyBlock = (label, text) => [
     competencyLabel(label + ":"),
-    new Paragraph({
-      children: [bodyRun(text)],
-      spacing:  { after: 0, ...LINE_115 }
-    }),
+    new Paragraph({ children: [bodyRun(text)], spacing: { after: 0, ...LINE_115 } }),
     blankLine()
   ];
 
-  competencyBlock("Product Strategy & Discovery",            content.competencies.strategy).forEach(p => children.push(p));
-  competencyBlock("Execution & Product Operations",          content.competencies.execution).forEach(p => children.push(p));
-  competencyBlock("Tools & Technology",                      content.competencies.tools).forEach(p => children.push(p));
+  competencyBlock("Product Strategy & Discovery",              content.competencies.strategy).forEach(p => children.push(p));
+  competencyBlock("Execution & Product Operations",            content.competencies.execution).forEach(p => children.push(p));
+  competencyBlock("Tools & Technology",                        content.competencies.tools).forEach(p => children.push(p));
   competencyBlock("Accessibility, Quality & AI (Superpowers)", content.competencies.accessibility).forEach(p => children.push(p));
 
-  // ── Assemble document ──────────────────────────────────────────────────────
+  // ── Assemble ───────────────────────────────────────────────────────────────
   const doc = new Document({
     numbering: {
       config: [{
         reference: "bullets",
         levels: [{
-          level:     0,
-          format:    LevelFormat.BULLET,
-          text:      "\u2022",
+          level: 0, format: LevelFormat.BULLET, text: "\u2022",
           alignment: AlignmentType.LEFT,
           style: {
-            paragraph: {
-              indent:  { left: 720, hanging: 360 },
-              spacing: { after: 0, ...LINE_115 }
-            }
+            paragraph: { indent: { left: 720, hanging: 360 }, spacing: { after: 0, ...LINE_115 } }
           }
         }]
       }]
     },
     styles: {
       default: {
-        document: {
-          run: { font: "Aptos", size: 24, color: BODY_BLACK }
-        }
+        document: { run: { font: "Aptos", size: 24, color: BODY_BLACK } }
       }
     },
     sections: [{
       properties: {
         page: {
-          size:   { width: IN(8.5), height: IN(11) },  // US Letter
-          margin: { top: IN(0.5), right: IN(0.5), bottom: IN(0.5), left: IN(0.5) }  // 0.5in all sides
+          size:   { width: IN(8.5), height: IN(11) },
+          margin: { top: IN(0.5), right: IN(0.5), bottom: IN(0.5), left: IN(0.5) }
         }
       },
       children
     }]
   });
 
+  // ── Inject drop shadow XML via post-processing ─────────────────────────────
+  // Pack to buffer first, then inject shadow into name + section header runs
   const buffer = await Packer.toBuffer(doc);
-  fs.writeFileSync(outputPath, buffer);
+
+  // Write to temp file, unzip, inject, rezip
+  const tmpDir  = path.join(OUTPUT_DIR, "_tmp_build");
+  const tmpDocx = path.join(OUTPUT_DIR, "_tmp.docx");
+  fs.writeFileSync(tmpDocx, buffer);
+
+  const { execSync } = require("child_process");
+
+  // Unzip
+  if (fs.existsSync(tmpDir)) execSync(`rm -rf "${tmpDir}"`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+  execSync(`cd "${tmpDir}" && unzip -q "${tmpDocx}"`);
+
+  // Read document.xml
+  const docXmlPath = path.join(tmpDir, "word", "document.xml");
+  let docXml = fs.readFileSync(docXmlPath, "utf8");
+
+  // Add w14 namespace to root element if not present
+  if (!docXml.includes("xmlns:w14=")) {
+    docXml = docXml.replace(
+      '<w:document ',
+      '<w:document xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
+    );
+  }
+
+  // Inject shadow into runs that have color 156082 (name + section headers)
+  // We target <w:color w:val="156082"/> and add the w14:textFx right after the rPr closing tag
+  // Strategy: find each <w:rPr>...</w:rPr> that contains color 156082 and inject shadow
+  docXml = docXml.replace(
+    /(<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*?<w:color w:val="156082"\/>(?:(?!<\/w:rPr>)[\s\S])*?<\/w:rPr>)/g,
+    (match) => {
+      // Only add if not already present
+      if (match.includes("w14:textFx")) return match;
+      return match.replace(
+        "</w:rPr>",
+        `</w:rPr><w14:textFx><w14:shadow w14:blurRad="38100" w14:dist="25400" w14:dir="5400000" w14:sx="100000" w14:sy="100000" w14:kx="0" w14:ky="0" w14:algn="ctr"><w14:srgbClr w14:val="6E747A"><w14:alpha w14:val="57000"/></w14:srgbClr></w14:shadow><w14:textOutline w14:w="0" w14:cap="flat" w14:cmpd="sng" w14:algn="ctr"><w14:noFill/><w14:miter w14:lim="800000"/></w14:textOutline><w14:textFill><w14:solidFill><w14:srgbClr w14:val="156082"/></w14:solidFill></w14:textFill></w14:textFx>`
+      );
+    }
+  );
+
+  fs.writeFileSync(docXmlPath, docXml);
+
+  // Rezip
+  fs.unlinkSync(tmpDocx);
+  execSync(`cd "${tmpDir}" && zip -qr "${outputPath}" .`);
+
+  // Cleanup
+  execSync(`rm -rf "${tmpDir}"`);
+
   console.log(`✅ Resume saved to: ${outputPath}`);
 }
 
@@ -470,9 +506,7 @@ async function main() {
     process.exit(1);
   }
 
-  if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  }
+  if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
   const outputPath = path.join(OUTPUT_DIR, outputFile);
   const apiKey     = loadApiKey();
@@ -481,6 +515,11 @@ async function main() {
 
   try {
     const content = await getTailoredContent(apiKey, jobPosting, profile);
+
+    // Log lengths for debugging
+    console.log(`📏 Summary: ${content.summary.length} chars`);
+    console.log(`📏 Bullets: CRVTech=${content.crvtech_bullets.length} Publicis=${content.publicis_bullets.length} Valtech=${content.valtech_bullets.length}`);
+
     await buildDocument(content, outputPath);
   } catch (err) {
     console.error("❌ Error:", err.message);
