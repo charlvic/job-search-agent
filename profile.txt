@@ -47,7 +47,7 @@ ATLASSIAN / TECHNICAL EXPERTISE
 - Atlassian ecosystem architecture and SDLC governance
 - QA transformation and Technology Operations
 - WCAG 2.2 accessibility (6+ years)
-- Certifications in progress: ACP-120 (Jira Administration for Cloud)
+- ACP-120: Jira Administration for Cloud – Atlassian Certified Professional | Earned 8/25/2026
 
 ================================================================================
 RATE FLOORS (hard minimums — never apply below these)

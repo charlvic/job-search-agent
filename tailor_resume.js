@@ -139,7 +139,7 @@ Publicis Groupe (Rauxa / Razorfish) - Product Director, New York, NY | Sept 2019
 - Defined and managed product backlogs for 8+ concurrent teams, setting DoR/DoD standards, driving estimation, and making tradeoff decisions to keep delivery aligned with value
 - Facilitated executive readouts, roadmap updates, sprint demos, and UAT/go-to-market reviews with C-level stakeholders and business unit leaders
 - Scaled cross-functional product teams from 5 to 30+ across the Americas, EMEA, and APAC, establishing operating rituals and embedding accessibility and quality up front
-- Acted as Atlassian Product Owner and SuperAdmin, standardizing Jira/Confluence projects, workflows and dashboards for visibility into roadmap, delivery, and risk
+- Acted as Atlassian Product Owner and SuperAdmin (ACP-120 Certified), standardizing Jira/Confluence projects, workflows and dashboards for visibility into roadmap, delivery, and risk
 - Integrated AI tools into discovery, design, and testing workflows to improve team throughput by ~30%
 - Partnered with account and sales leadership to craft product visions and ROI-backed roadmaps that helped secure $155M+ in new business
 - Collaborated with engineering leads to shape technical approaches, sequence dependencies, and manage functional & non-functional requirements
@@ -160,12 +160,13 @@ EDUCATION:
 - Certified Cisco Networking Associate Program
 
 CERTIFICATIONS:
+- ACP-120: Jira Administration for Cloud – Atlassian Certified Professional | 2026
 - Accessibility Fundamentals Certificate – International Association of Accessibility Professionals (IAAP) | Expected 2026
 
 CORE COMPETENCIES & SKILLS:
 Product Strategy & Discovery: Product Vision • North Star framework • GIST planning • 4 Big Risks • Customer discovery & user research • JTBD • Road mapping • Prioritization (RICE, MoSCoW) • Business Model Canvas • Design Sprints • Customer Journey Mapping • AARRR & growth metrics • OKRs
 Execution & Product Operations: Backlog management & release planning • Agile/Scrum product ownership • Cross-functional team leadership • Product Operations & Governance • Go-to-market strategy • Experimentation & A/B testing • Stakeholder management & executive communication • Vendor/partner management • P&L awareness
-Tools & Technology: Jira (Professional Admin) • Confluence • Loom • Bitrix • ServiceNow • Figma • Miro • SmartSheets • Trello • GA/Adobe Analytics • SurveyMonkey • CI/CD-aware workflows • HTML/CSS/JS, React • Headless CMS • Email/martech tooling • AWS/Azure • Jenkins • Git • Bitbucket
+Tools & Technology: Jira (ACP-120 Certified Administrator) • Confluence • Loom • Bitrix • ServiceNow • Figma • Miro • SmartSheets • Trello • GA/Adobe Analytics • SurveyMonkey • CI/CD-aware workflows • HTML/CSS/JS, React • Headless CMS • Email/martech tooling • AWS/Azure • Jenkins • Git • Bitbucket
 Accessibility, Quality & AI (Superpowers): Accessible product design (WCAG 2.0/2.1/2.2, POUR) • Automated ADA Testing (AQA) • Screen readers (JAWS, NVDA, VoiceOver, TalkBack) • QA strategy & risk mitigation • Selenium • Cypress • Playwright • Postman • JMeter/BlazeMeter • ChatGPT • Claude • Perplexity • Copilot • Gemini • Midjourney • Rovo • Agentic AI & AI-assisted test design
 
 JOB POSTING TO TAILOR FOR:
@@ -393,6 +394,7 @@ async function buildDocument(content, outputPath) {
 
   // CERTIFICATIONS
   children.push(sectionHeader("CERTIFICATIONS"));
+  children.push(bulletPara("ACP-120: Jira Administration for Cloud – Atlassian Certified Professional | 2026"));
   children.push(bulletPara("Accessibility Fundamentals Certificate – International Association of Accessibility Professionals (IAAP) | Expected 2026"));
   children.push(blankLine());
 

@@ -1,7 +1,6 @@
 """
 CRVTech Job Search Agent
-v0.9.0 - Proposal optional (default no), human voice rewrite
-         daily total, monthly pace warning, usage.log
+v0.9.1 - Add ACP-120 certification to PM-track resume tailoring
 """
 
 import os
@@ -625,7 +624,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.9.0")
+    print("  CRVTech Job Search Agent  v0.9.1")
     print("="*60)
 
     api_key = load_api_key()
