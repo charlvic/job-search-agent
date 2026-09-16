@@ -1,10 +1,11 @@
 """
 CRVTech Job Search Agent
-v0.9.1 - Add ACP-120 certification to PM-track resume tailoring
+v0.9.2 - Fix terminal freeze/beep on large paste (read via sys.stdin, not input())
 """
 
 import os
 import re
+import sys
 import json
 import httpx
 import anthropic
@@ -211,8 +212,8 @@ def prompt_for_paste() -> str:
     print("   3. Paste it below, then type END on a new line and hit Enter\n")
 
     lines = []
-    while True:
-        line = input()
+    for line in sys.stdin:
+        line = line.rstrip("\n")
         if line.strip().upper() == "END":
             break
         lines.append(line)
@@ -624,7 +625,7 @@ def process_qualifying_posting(client, posting_text, profile, score_data, url, i
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
-    print("  CRVTech Job Search Agent  v0.9.1")
+    print("  CRVTech Job Search Agent  v0.9.2")
     print("="*60)
 
     api_key = load_api_key()
